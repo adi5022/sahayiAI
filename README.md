@@ -13,12 +13,20 @@ and Tharun Thomas Eapen (Mar Baselios College of Engineering and Technology).
 ## Features
 
 - **Voice, text and photos.** Malayalam, English and code-mixed speech.
-- **Urgency rating.** Level 1 calm, 2 check in, 3 emergency. Level 3 replies include the emergency number 112.
+- **Urgency rating and type tag.** Level 1 calm, 2 check in, 3 urgent. Every message is tagged medical, scam, safety, emotional or general, and the tag appears in family alerts and `/status`. Medical and safety emergencies point to 112.
+- **Scam help.** Seniors can describe a suspicious call, SMS or link (or send a screenshot). Sahayi asks one question at a time, gives short advice (never share an OTP, call the bank on the card number, 1930 for fraud) and alerts family when it is serious, for example money already sent or a "digital arrest" call.
 - **Family link by code.** A member shares a code; family joins with `/family CODE`.
 - **Family tools.** Ask about the member's day (answered only from the conversation log), or relay a message with `/tell`.
 - **Timestamps** on every alert and message, in IST.
 - **Scope guard.** Coding and off-topic requests are refused before and after the model runs.
 - **Photo request.** Sahayi asks for a photo when a visible injury is described.
+
+## Memory
+
+Two separate stores keep topics from leaking into each other:
+
+- **Working memory** is what the model sees as the conversation: only the current episode (a new one starts after 20 minutes of silence) and the current topic. Once a member moves from a scam to a health symptom, the scam turns are dropped. Messages family send to the member are added too, so "what did he say?" means that message.
+- **Long-term history** is a per-member list of dated notes (health reports, scam incidents, safety events) kept in SQLite and shown to the model only as labelled background. Family can read it with `/history`. Export everything as JSON (medical history, other incidents, chat log) with `uv run python -m bia_hackaton_2026.pipeline.export <chat_id>`; the files go to `data/exports/` and are git-ignored because they hold private conversations.
 
 ## How it works
 
@@ -102,7 +110,7 @@ contact; the two layout buttons show one chat or several side by side; type `/` 
 ### Commands
 
 Members: `/start`, `/code`, `/newcode`, `/help`.
-Family: `/family CODE`, `/status`, `/ask`, `/tell`, `/stopfamily`, `/help`.
+Family: `/family CODE`, `/status`, `/history`, `/ask`, `/tell`, `/stopfamily`, `/help`.
 
 ## Limitations
 

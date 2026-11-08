@@ -7,7 +7,7 @@ import threading
 import time
 
 from bia_hackaton_2026.agent import run_turn
-from bia_hackaton_2026.pipeline import store
+from bia_hackaton_2026.pipeline import memory, store
 from bia_hackaton_2026.stt.detect import detect_and_transcribe
 from bia_hackaton_2026.pipeline.guard import OFF_TOPIC_REPLY, is_coding_request, looks_like_code
 from bia_hackaton_2026.vlm import build_agent_input, describe_verified
@@ -18,10 +18,28 @@ _IMAGE_SEEN: set[str] = set()    # chats that already sent a photo
 _IMAGE_ASKED: set[str] = set()   # chats we already asked for a photo (ask once, do not nag)
 
 PHOTO_REQUEST = "If you can, please send me a photo of it. It will help your family and care team understand."
+SCREENSHOT_REQUEST = "If you can, please send me a screenshot or photo of the message. It will help me check it."
 
 
 def _lock(chat_id: str) -> threading.Lock:
     return _LOCKS.setdefault(chat_id, threading.Lock())
+
+
+def _full_history(chat_id: str) -> list[dict]:
+    """All recent entries of this chat with their time and topic; reloaded from SQLite after a restart."""
+    if chat_id not in _HISTORY:
+        _HISTORY[chat_id] = store.load_history_full(chat_id)
+    return _HISTORY[chat_id]
+
+
+def note_family_message(chat_id, who: str, text: str) -> None:
+    """A family member's message was delivered to this member: add it to the member's working memory so that a reply
+    such as "what did he say?" is understood as being about that message."""
+    chat_id = str(chat_id)
+    with _lock(chat_id):
+        entry = memory.family_note_entry(who, text)
+        _full_history(chat_id).append(entry)
+        store.add_history(chat_id, [entry])
 
 
 def reset_chat(chat_id) -> None:
@@ -43,7 +61,7 @@ def handle_message(
     image_status, image_review, asked_image, input (what the LLM saw), seconds, error."""
     chat_id = str(chat_id)
     t0 = time.perf_counter()
-    out = {"reply": "", "alert": "", "level": 1, "family_send": False, "transcript": "", "language": "",
+    out = {"reply": "", "alert": "", "level": 1, "category": "general", "family_send": False, "transcript": "", "language": "",
            "image_status": "", "image_review": False, "asked_image": False, "input": "", "seconds": 0.0, "error": ""}
 
     with _lock(chat_id):  # one message at a time per chat keeps conversation history ordered
@@ -83,16 +101,23 @@ def handle_message(
             out["seconds"] = round(time.perf_counter() - t0, 2)
             return out
 
-        if chat_id not in _HISTORY:  # first use since the bot started: reload the saved conversation
-            _HISTORY[chat_id] = store.load_history(chat_id)
-        history = _HISTORY[chat_id]
-        before = len(history)
+        full = _full_history(chat_id)
+        work = memory.working_set(full)   # working memory: current episode and topic only
+        before = len(work)
         kw = {"model": llm_model} if llm_model else {}
-        res = run_turn(agent_input, history, **kw)  # the transport (Telegram) delivers messages itself
-        store.add_history(chat_id, history[before:])  # persist this exchange
+        # the transport (Telegram) delivers messages itself; long-term notes go in as background, not as turns
+        res = run_turn(agent_input, work, background=memory.background_block(chat_id), **kw)
         turn = res["turn"]
+        new = [dict(e, ts=time.time(), cat=turn.family.category) for e in work[before:]]
+        full.extend(new)
+        store.add_history(chat_id, new)  # persist this exchange
+        if not res["fallback"]:
+            # long-term memory: the model's own note, or (so no incident goes unlogged) the factual family summary of any alert
+            note = turn.note.strip() or (turn.family.summary if turn.family.suggested_level >= 2 else "")
+            memory.remember(chat_id, turn.family.category, turn.family.suggested_level, note)
         out.update(
             reply=res["user_message"], alert=res["family_message"], level=turn.family.suggested_level,
+            category=turn.family.category,
             family_send=res["family_sent"], input=agent_input,
         )
         if looks_like_code(out["reply"]):  # output guard: never send code to a member
@@ -102,7 +127,7 @@ def handle_message(
             _IMAGE_SEEN.add(chat_id)
         elif turn.user.request_image and chat_id not in _IMAGE_SEEN and chat_id not in _IMAGE_ASKED:
             _IMAGE_ASKED.add(chat_id)
-            out["reply"] = out["reply"] + "\n\n" + PHOTO_REQUEST
+            out["reply"] = out["reply"] + "\n\n" + (SCREENSHOT_REQUEST if out["category"] == "scam" else PHOTO_REQUEST)
             out["asked_image"] = True
         if res["fallback"]:
             out["error"] = res["error"] or "Agent output was invalid; fallback reply used."

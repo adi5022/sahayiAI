@@ -11,5 +11,11 @@ export const api = {
   addUser: (name) => post("/api/users", { name }),
   deleteUser: (id) => fetch(`/api/users/${id}`, { method: "DELETE" }).then(j),
   messages: (id, after) => fetch(`/api/users/${id}/messages?after=${after}`).then(j),
+  sendPhoto: (id, file, caption) => {
+    const f = new FormData();
+    f.append("photo", file);
+    f.append("caption", caption || "");
+    return fetch(`/api/users/${id}/photo`, { method: "POST", body: f }).then(j);
+  },
   send: (id, text) => post(`/api/users/${id}/send`, { text }),
 };

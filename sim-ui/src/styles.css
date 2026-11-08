@@ -85,3 +85,4 @@ input { font: inherit; color: inherit; }
 .actions button { padding: 8px 14px; border-radius: 8px; color: var(--accent); }
 .actions .primary { background: var(--accent); color: #fff; }
 .actions .primary:disabled { opacity: .4; cursor: default; }
+.photo { display: block; max-width: 100%; max-height: 320px; border-radius: 8px; margin: 2px 0 6px; }

@@ -18,7 +18,8 @@ except Exception:
 MEMORY_LIMIT = 20                 # plain truncation of old messages
 
 
-def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: str | None = None) -> dict:
+def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: str | None = None,
+             background: str = "") -> dict:
     """Appends the exchange to `history` (in place). Returns dict with turn, messages, send flag,
     raw LLM output, attempts, fallback flag, error, seconds, model."""
     t0 = time.perf_counter()
@@ -26,7 +27,7 @@ def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: 
     for attempt in range(2):
         attempts = attempt + 1
         try:
-            raw = ask_llm(user_input, history[-MEMORY_LIMIT:], model, api_key)
+            raw = ask_llm(user_input, history[-MEMORY_LIMIT:], model, api_key, background=background)
         except Exception as e:
             error = f"LLM call failed: {e}"
             continue

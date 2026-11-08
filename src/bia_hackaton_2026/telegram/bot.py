@@ -11,10 +11,11 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 
 import time
 
-from bia_hackaton_2026.llm.family_qa import answer_family_question, rewrite_for_member
+from bia_hackaton_2026.llm.family_qa import answer_family_question, route_family_message
 from bia_hackaton_2026.notify.telegram_family import send_family_alert
 from bia_hackaton_2026.notify.transport import deliver
 from bia_hackaton_2026.pipeline import handle_message, reset_chat, store
+from bia_hackaton_2026.pipeline.inbound import note_family_message
 from bia_hackaton_2026.pipeline.status import activity_log, is_elder, record, status_text
 from bia_hackaton_2026.pipeline.timeutil import fmt
 from telegram.error import NetworkError, TimedOut
@@ -108,7 +109,8 @@ async def respond(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str 
         print(f"[SAHAYI] transcript: {out['transcript']}")
     if out["family_send"] or out["level"] >= 2:
         name = update.effective_user.first_name or "A Sahayi user"
-        res = await send_family_alert(context.bot, chat_id, name, out["alert"], out["level"])
+        res = await send_family_alert(context.bot, chat_id, name, out["alert"], out["level"], photo=image,
+                                       category=out["category"])
         print(f"[SAHAYI] family alert: registered={res['registered']} delivered={res['delivered']} "
               f"failed={res['failed']} skipped={res['skipped'] or '-'}")
         if not res["delivered"]:
@@ -210,13 +212,15 @@ async def family_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def family_question(update: Update, context: ContextTypes.DEFAULT_TYPE, question: str) -> None:
     """Answer a family member's question about the senior from the activity log."""
     question = (question or "").strip()
-    if RELAY_INTENT.match(question):  # "ask him to ...", "tell her ..." means: send it to the member
-        await relay_to_member(update, context, question)
-        return
     if not question:
         await update.message.reply_text("Ask me something about them, for example: How is she today?")
         return
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+    # Decide by meaning whether this is a message to pass on to the member or a question about them.
+    route = await asyncio.to_thread(route_family_message, question)
+    if route["intent"] == "relay" and route["message"]:
+        await relay_to_member(update, context, route["message"], reworded=True)
+        return
     elders = store.elders_of(update.effective_chat.id)
     try:
         answer = await asyncio.to_thread(answer_family_question, question, activity_log(elders))
@@ -226,34 +230,51 @@ async def family_question(update: Update, context: ContextTypes.DEFAULT_TYPE, qu
     await update.message.reply_text(answer or "I do not have that information.")
 
 
-async def relay_to_member(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
-    """Deliver a family member's message to the member(s) they are linked to, through the bot."""
+async def relay_to_member(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reworded: bool = False) -> None:
+    """Deliver `text`, exactly as given, to the member(s) the family member is linked to, through the bot."""
     cid = update.effective_chat.id
     elders = store.elders_of(cid)
     if not elders:
         await update.message.reply_text(NOT_FAMILY)
         return
-    text = re.sub(r"^\s*/?tell\s*", "", text, flags=re.I).strip() if text.lower().startswith("/tell") else text.strip()
-    if not text:
+    msg = text.strip()
+    if not msg:
         await update.message.reply_text("Write the message after the command, for example:\n/tell Please tell us where it hurts")
         return
     who = update.effective_user.first_name or "your family"
-    msg = await asyncio.to_thread(rewrite_for_member, text)
     done, failed = [], []
     for e in elders:
         try:
             await deliver(context.bot, e["chat_id"],
                           f"Message from {who} (your family), {fmt()}:\n{msg}\n\nYou can answer me here.")
             done.append(e["name"] or "the member")
+            await asyncio.to_thread(note_family_message, e["chat_id"], who, msg)  # so the member's replies make sense
         except Exception as ex:
             failed.append(f"{e['name'] or 'the member'} ({str(ex)[:80]})")
     reply = (f"Sent to {', '.join(done)} at {fmt()}: \"{msg}\"" if done else "") + \
-            (f"\nCould not send to: {', '.join(failed)}" if failed else "")
+            (f"\nCould not send to: {', '.join(failed)}" if failed else "") + \
+            ("\n(I put your request into a message. To send your exact words, use /tell.)" if reworded and done else "")
     await update.message.reply_text(reply.strip())
     print(f"[SAHAYI] relay from family {cid}: sent={done} failed={failed}")
 
 
+async def family_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/history: dated health reports and incidents (scams, safety) the member has told Sahayi about."""
+    elders = store.elders_of(update.effective_chat.id)
+    if not elders:
+        await update.message.reply_text(NOT_FAMILY)
+        return
+    blocks = []
+    for e in elders:
+        notes = store.recent_notes(e["chat_id"], 15)
+        lines = [f"- {fmt(n['ts'])} [{n['category']}, level {n['level']}] {n['note']}" for n in notes]
+        blocks.append(f"History of {e['name'] or 'the member'} (from what they told Sahayi, newest last):\n" +
+                      ("\n".join(lines) if lines else "Nothing recorded yet."))
+    await update.message.reply_text("\n\n".join(blocks)[:3900])
+
+
 async def family_tell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tell MESSAGE: sends exactly these words (use it when the wording matters; otherwise just write naturally)."""
     await relay_to_member(update, context, " ".join(context.args))
 
 
@@ -273,8 +294,9 @@ COMMANDS = [
     ("newcode", "Disconnect all family and get a new code"),
     ("family", "Family: connect to a member with /family CODE"),
     ("status", "Family: latest summary of the member"),
+    ("history", "Family: health and incident history of the member"),
     ("ask", "Family: ask about the member"),
-    ("tell", "Family: send a message to the member"),
+    ("tell", "Family: send your exact words to the member"),
     ("stopfamily", "Family: disconnect from the member"),
 ]
 
@@ -295,8 +317,9 @@ HELP_FAMILY = (
     "Commands:\n"
     "/family CODE - connect to a member (ask them for their code)\n"
     "/status - latest summary and alerts\n"
+    "/history - health reports and incidents (scams, safety) over time\n"
     "/ask QUESTION - or just type a question, for example: How is she today?\n"
-    "/tell MESSAGE - send a message to the member, for example: /tell Please tell us where it hurts\n"
+    "/tell MESSAGE - send these exact words to the member (you can also just write, e.g. Ask her if she took her medicine)\n"
     "/stopfamily - disconnect from the member\n"
     "/help - show this message\n\n"
     "In an emergency, call 112."
@@ -402,6 +425,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("code", my_code))
     app.add_handler(CommandHandler("newcode", new_code))
     app.add_handler(CommandHandler("status", family_status))
+    app.add_handler(CommandHandler("history", family_history))
     app.add_handler(CommandHandler("ask", family_ask))
     app.add_handler(CommandHandler("tell", family_tell))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
@@ -410,4 +434,4 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.Document.IMAGE, on_image_document))
 
     print("Bot is running... Go send something to it on Telegram!")
-    app.run_polling()
+    app.run_polling(bootstrap_retries=-1)  # keep retrying if Telegram is unreachable at startup instead of crashing

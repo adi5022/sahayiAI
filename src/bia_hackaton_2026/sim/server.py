@@ -11,7 +11,7 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -94,6 +94,37 @@ async def send(chat_id: int, body: Outgoing):
     _TASKS.add(task)
     task.add_done_callback(_TASKS.discard)
     return {"ok": True}
+
+
+@app.post("/api/users/{chat_id}/photo")
+async def send_photo(chat_id: int, photo: UploadFile = File(...), caption: str = Form("")):
+    name = next((u["name"] for u in store.virtual_users() if int(u["chat_id"]) == chat_id), None)
+    if name is None:
+        raise HTTPException(404, "unknown user")
+    data = await photo.read()
+    if not data or len(data) > 10 * 1024 * 1024:
+        raise HTTPException(400, "photo missing or larger than 10 MB")
+    mime = photo.content_type if (photo.content_type or "").startswith("image/") else "image/jpeg"
+    _PENDING[chat_id] = _PENDING.get(chat_id, 0) + 1
+
+    async def run():
+        try:
+            await live.say_photo(chat_id, name, data, mime, caption.strip())
+        finally:
+            _PENDING[chat_id] -= 1
+
+    task = asyncio.create_task(run())
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
+    return {"ok": True}
+
+
+@app.get("/api/media/{name}")
+def media(name: str):
+    f = store.media_dir() / Path(name).name      # Path().name blocks path traversal
+    if not f.is_file():
+        raise HTTPException(404)
+    return FileResponse(f)
 
 
 if DIST.exists():  # built UI (npm run build in sim-ui/)

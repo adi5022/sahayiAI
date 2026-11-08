@@ -27,6 +27,11 @@ class _LiveBot:
         else:
             await self.real.send_message(chat_id, text, **kw)
 
+    async def send_photo(self, chat_id, photo=None, caption="", **kw):
+        if self.real is None:
+            raise RuntimeError("TELEGRAM_TOKEN is not set, cannot reach the real senior")
+        await self.real.send_photo(chat_id, photo=photo, caption=caption, **kw)
+
     async def send_chat_action(self, *a, **kw):
         return None
 
@@ -71,5 +76,15 @@ async def say(chat_id: int, name: str, text: str) -> None:
                 await handler(update, ctx)
         else:
             await tg.on_text(update, ctx)
+    except Exception as e:
+        store.add_virtual(chat_id, "in", f"(error: {e})")
+
+
+async def say_photo(chat_id: int, name: str, photo: bytes, mime: str, caption: str = "") -> None:
+    """The simulated user sends a photo (with an optional caption) to the bot, as a senior would."""
+    store.add_virtual(chat_id, "out", caption, media=store.save_virtual_media(photo, mime))
+    try:
+        ctx = SimpleNamespace(bot=_LiveBot(await _real_bot()), args=[])
+        await tg.respond(_update(chat_id, name, caption), ctx, text=caption, image=(photo, mime))
     except Exception as e:
         store.add_virtual(chat_id, "in", f"(error: {e})")

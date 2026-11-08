@@ -17,7 +17,7 @@ SIM_DB = Path(__file__).resolve().parents[3] / "data" / "sahayi_sim.db"
 
 COMMANDS = {
     "start": tg.start, "help": tg.help_cmd, "code": tg.my_code, "newcode": tg.new_code,
-    "family": tg.family_join, "stopfamily": tg.family_leave, "status": tg.family_status,
+    "family": tg.family_join, "stopfamily": tg.family_leave, "status": tg.family_status, "history": tg.family_history,
     "ask": tg.family_ask, "tell": tg.family_tell,
 }
 
@@ -30,6 +30,9 @@ class _Bot:
 
     async def send_message(self, chat_id, text, **kw):
         self.sim._deliver(int(chat_id), text)
+
+    async def send_photo(self, chat_id, photo=None, caption="", **kw):
+        self.sim._deliver(int(chat_id), f"[photo, {len(photo or b'')} bytes] {caption}")
 
     async def send_chat_action(self, *a, **kw):
         return None

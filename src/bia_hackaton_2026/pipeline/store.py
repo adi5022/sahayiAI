@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id
 CREATE TABLE IF NOT EXISTS virtual_inbox(id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT, ts REAL, direction TEXT, text TEXT);
 CREATE TABLE IF NOT EXISTS virtual_users(chat_id TEXT PRIMARY KEY, name TEXT, created REAL);
 CREATE INDEX IF NOT EXISTS idx_virtual_chat ON virtual_inbox(chat_id, id);
+CREATE TABLE IF NOT EXISTS memory_notes(id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT, ts REAL, category TEXT, level INTEGER, note TEXT);
+CREATE INDEX IF NOT EXISTS idx_notes_chat ON memory_notes(chat_id, id);
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, ts);
 CREATE INDEX IF NOT EXISTS idx_history_chat ON history(chat_id, id);
 """
@@ -33,6 +35,12 @@ def _conn() -> sqlite3.Connection:
     c = sqlite3.connect(DB_PATH, timeout=10)
     c.row_factory = sqlite3.Row
     c.executescript(_SCHEMA)
+    cols = {r[1] for r in c.execute("PRAGMA table_info(virtual_inbox)")}
+    mcols = {r[1] for r in c.execute("PRAGMA table_info(messages)")}
+    if "category" not in mcols:  # added later: medical / scam / safety / emotional / general tag
+        c.execute("ALTER TABLE messages ADD COLUMN category TEXT DEFAULT 'general'")
+    if "media" not in cols:  # added later: simulated chats can carry a photo
+        c.execute("ALTER TABLE virtual_inbox ADD COLUMN media TEXT")
     return c
 
 
@@ -120,9 +128,10 @@ def is_family(chat_id) -> bool:
 
 
 # ---------- activity log (what the family sees) ----------
-def add_message(chat_id, level: int, said: str, reply: str, alert: str, photo: bool, review: bool) -> None:
-    _run("INSERT INTO messages(chat_id,ts,level,said,reply,alert,photo,review) VALUES(?,?,?,?,?,?,?,?)",
-         (str(chat_id), time.time(), level, said, reply, alert, int(photo), int(review)))
+def add_message(chat_id, level: int, said: str, reply: str, alert: str, photo: bool, review: bool,
+                category: str = "general") -> None:
+    _run("INSERT INTO messages(chat_id,ts,level,said,reply,alert,photo,review,category) VALUES(?,?,?,?,?,?,?,?,?)",
+         (str(chat_id), time.time(), level, said, reply, alert, int(photo), int(review), category))
 
 
 def recent_messages(chat_id, limit: int = 12) -> list[dict]:
@@ -137,6 +146,12 @@ def add_history(chat_id, entries: list[dict]) -> None:
              (str(chat_id), time.time(), e["role"], e["content"]))
 
 
+def load_history_full(chat_id, limit: int = 40) -> list[dict]:
+    """Saved conversation entries with their time, oldest first (the working memory filters them)."""
+    rows = _run("SELECT role,content,ts FROM history WHERE chat_id=? ORDER BY id DESC LIMIT ?", (str(chat_id), limit), many=True)
+    return rows[::-1]
+
+
 def load_history(chat_id, limit: int = 20) -> list[dict]:
     rows = _run("SELECT role,content FROM history WHERE chat_id=? ORDER BY id DESC LIMIT ?", (str(chat_id), limit), many=True)
     return rows[::-1]
@@ -144,6 +159,18 @@ def load_history(chat_id, limit: int = 20) -> list[dict]:
 
 def clear_history(chat_id) -> None:
     _run("DELETE FROM history WHERE chat_id=?", (str(chat_id),))
+
+
+# ---------- long-term member notes (medical history, incidents) ----------
+def add_note(chat_id, category: str, level: int, note: str) -> None:
+    _run("INSERT INTO memory_notes(chat_id,ts,category,level,note) VALUES(?,?,?,?,?)",
+         (str(chat_id), time.time(), category, level, note))
+
+
+def recent_notes(chat_id, limit: int = 20) -> list[dict]:
+    rows = _run("SELECT ts,category,level,note FROM memory_notes WHERE chat_id=? ORDER BY id DESC LIMIT ?",
+                (str(chat_id), limit), many=True)
+    return rows[::-1]
 
 
 # ---------- virtual (simulated) chats ----------
@@ -179,12 +206,27 @@ def delete_virtual_user(chat_id) -> None:
     _run("DELETE FROM elders WHERE chat_id=?", (cid,))
 
 
-def add_virtual(chat_id, direction: str, text: str) -> None:
+def media_dir() -> Path:
+    d = DB_PATH.parent / "virtual_media"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def save_virtual_media(data: bytes, mime: str = "image/jpeg") -> str:
+    """Store a photo for a simulated chat; returns the file name."""
+    ext = {"image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}.get(mime, ".jpg")
+    name = secrets.token_hex(8) + ext
+    (media_dir() / name).write_bytes(data)
+    return name
+
+
+def add_virtual(chat_id, direction: str, text: str, media: str | None = None) -> None:
     """direction: 'in' = sent to the simulated user by the bot, 'out' = typed by the simulated user."""
-    _run("INSERT INTO virtual_inbox(chat_id,ts,direction,text) VALUES(?,?,?,?)", (str(chat_id), time.time(), direction, text))
+    _run("INSERT INTO virtual_inbox(chat_id,ts,direction,text,media) VALUES(?,?,?,?,?)",
+         (str(chat_id), time.time(), direction, text, media))
 
 
 def virtual_messages(chat_id, after: int = 0, limit: int = 500) -> list[dict]:
-    rows = _run("SELECT id,ts,direction,text FROM virtual_inbox WHERE chat_id=? AND id>? ORDER BY id DESC LIMIT ?",
+    rows = _run("SELECT id,ts,direction,text,media FROM virtual_inbox WHERE chat_id=? AND id>? ORDER BY id DESC LIMIT ?",
                 (str(chat_id), after, limit), many=True)
     return rows[::-1]

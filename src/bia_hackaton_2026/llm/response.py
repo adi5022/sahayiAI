@@ -1,13 +1,9 @@
-"""LLM call for the Sahayi agent (Groq-hosted GPT-OSS). The prompt lives in prompt.py."""
-import os
-
-from groq import Groq
-
+"""LLM call for the Sahayi agent (Groq-hosted GPT-OSS, with fallback to other Groq models). The prompt lives in prompt.py."""
+from bia_hackaton_2026.llm.groq_chat import AGENT_CHAIN, chain_from, chat
 from bia_hackaton_2026.llm.prompt import SYSTEM_PROMPT
 
-# Was a local Ollama model (gemma4:e2b); now Groq-hosted GPT-OSS.
 MODEL = "openai/gpt-oss-120b"
-MODELS = ("openai/gpt-oss-120b", "openai/gpt-oss-20b")
+MODELS = AGENT_CHAIN
 
 
 def ask_llm(
@@ -16,20 +12,11 @@ def ask_llm(
     model: str = MODEL,
     api_key: str | None = None,
     system_prompt: str = SYSTEM_PROMPT,
+    background: str = "",
 ) -> str:
-    """Returns the model's JSON reply as a string (parsed/validated by the caller)."""
-    key = (api_key or os.environ.get("GROQ_API_KEY") or "").strip()
-    if not key:
-        raise RuntimeError("Groq API key missing (set GROQ_API_KEY in .env or the sidebar).")
-    r = Groq(api_key=key).chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            *history,
-            {"role": "user", "content": user_input},
-        ],
-        response_format={"type": "json_object"},  # equivalent of Ollama's format="json"
-        reasoning_effort="low",                   # equivalent of think=False: keep it fast
-        temperature=0.2,
-    )
-    return r.choices[0].message.content or ""
+    """Returns the model's JSON reply as a string (parsed/validated by the caller).
+    `model` is tried first; if it is rate limited or down, the other models in AGENT_CHAIN are tried in turn."""
+    if background:  # long-term member notes, kept apart from the conversation turns
+        system_prompt = system_prompt + "\n\n" + background
+    messages = [{"role": "system", "content": system_prompt}, *history, {"role": "user", "content": user_input}]
+    return chat(messages, chain_from(model, AGENT_CHAIN), api_key, json_mode=True, temperature=0.2)

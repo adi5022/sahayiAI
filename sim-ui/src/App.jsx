@@ -3,7 +3,12 @@ import { api } from "./api.js";
 
 const COLORS = ["#e17076", "#7bc862", "#e5ca77", "#65aadd", "#a695e7", "#ee7aae", "#6ec9cb", "#faa774"];
 const colorOf = (id) => COLORS[Number(id) % COLORS.length];
-const timeOf = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// Overlapping polls can fetch the same messages twice; merging by id keeps each message once.
+const merge = (old = [], add = []) => {
+  const ids = new Set(old.map((m) => m.id));
+  return [...old, ...add.filter((m) => !ids.has(m.id))];
+};
+const timeOf =(ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 function Avatar({ user, size = 48 }) {
   return (
@@ -31,11 +36,12 @@ function Linkified({ text, onCommand }) {
   return <>{out}</>;
 }
 
-function Pane({ user, commands, messages, typing, onSend, onClose, onDelete, closable }) {
+function Pane({ user, commands, messages, typing, onSend, onPhoto, onClose, onDelete, closable }) {
   const [text, setText] = useState("");
   const [menu, setMenu] = useState(false);
   const bottom = useRef(null);
   const inputRef = useRef(null);
+  const fileRef = useRef(null);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
@@ -86,6 +92,7 @@ function Pane({ user, commands, messages, typing, onSend, onClose, onDelete, clo
         {messages.map((m) => (
           <div key={m.id} className={`row ${m.direction === "out" ? "out" : "in"}`}>
             <div className="bubble">
+              {m.media && <img className="photo" src={`/api/media/${m.media}`} alt="" />}
               <span className="text">
                 {m.direction === "in" ? <Linkified text={m.text} onCommand={onCommandLink} /> : m.text}
               </span>
@@ -113,6 +120,9 @@ function Pane({ user, commands, messages, typing, onSend, onClose, onDelete, clo
       )}
 
       <form className="composer" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <input ref={fileRef} type="file" accept="image/*" hidden
+               onChange={(e) => { const f = e.target.files[0]; if (f) onPhoto(f, text.trim()); setText(""); e.target.value = ""; }} />
+        <button type="button" className="icon" title="Send a photo" onClick={() => fileRef.current?.click()}>📎</button>
         <button type="button" className={`menu-btn ${menu ? "on" : ""}`} onClick={() => setMenu(!menu)}>☰ Menu</button>
         <input ref={inputRef} value={text} onChange={(e) => setText(e.target.value)} placeholder="Message" autoFocus />
         <button type="submit" className="send" disabled={!text.trim()}>➤</button>
@@ -154,7 +164,7 @@ export default function App() {
         if (!have) continue; // history is loaded when the chat is opened
         const after = have.length ? have[have.length - 1].id : 0;
         const r = await api.messages(id, after);
-        if (r.messages.length) setMsgs((m) => ({ ...m, [id]: [...(m[id] || []), ...r.messages] }));
+        if (r.messages.length) setMsgs((m) => ({ ...m, [id]: merge(m[id], r.messages) }));
       }
     } catch {
       setError("Cannot reach the simulator server. Start it with: uv run python -m bia_hackaton_2026.sim.server");
@@ -273,6 +283,7 @@ export default function App() {
                   typing={typing[id]}
                   closable={open.length > 1}
                   onSend={(t) => send(id, t)}
+                  onPhoto={async (f, cap) => { await api.sendPhoto(id, f, cap); poll(); }}
                   onClose={() => setOpen((o) => o.filter((x) => x !== id))}
                   onDelete={() => remove(id)}
                 />

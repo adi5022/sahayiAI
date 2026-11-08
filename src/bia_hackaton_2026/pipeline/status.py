@@ -14,7 +14,7 @@ def record(chat_id, name: str, out: dict) -> None:
     store.add_message(
         chat_id, out["level"], (out["input"] or "")[:500], out["reply"][:300],
         out["alert"][:400] if (out["family_send"] or out["level"] >= 2) else "",
-        bool(out["image_status"]), out["image_review"],
+        bool(out["image_status"]), out["image_review"], out.get("category", "general"),
     )
 
 
@@ -42,11 +42,11 @@ def status_text(elders: list[dict]) -> str:
             continue
         last = msgs[-1]
         lines = [f"Member: {e['name']}\nLast message: {_ago(last['ts'])}\n"
-                 f"Current level: {last['level']} ({LEVEL_NAMES.get(last['level'], '?')})"]
+                 f"Current level: {last['level']} ({LEVEL_NAMES.get(last['level'], '?')}), type: {last.get('category') or 'general'}"]
         alerts = [x for x in msgs if x["alert"]]
         if alerts:
             a = alerts[-1]
-            lines.append(f"Last alert ({_ago(a['ts'])}, level {a['level']}):\n{a['alert'].replace('*', '')}")
+            lines.append(f"Last alert ({_ago(a['ts'])}, level {a['level']}, {a.get('category') or 'general'}):\n{a['alert'].replace('*', '')}")
         else:
             lines.append("No alerts so far.")
         lines.append("Recent messages:\n" + "\n".join(
@@ -59,7 +59,7 @@ def activity_log(elders: list[dict]) -> str:
     """Recent log of the linked members, used as context for a family member's free-form question."""
     parts = []
     for e in elders:
-        rows = [f"[{_ago(x['ts'])}] level {x['level']} ({LEVEL_NAMES.get(x['level'], '?')}); "
+        rows = [f"[{_ago(x['ts'])}] level {x['level']} ({LEVEL_NAMES.get(x['level'], '?')}), type {x.get('category') or 'general'}; "
                 f"member said/sent: {x['said'] or '(nothing)'}; Sahayi replied: {x['reply']}"
                 + (f"; photo received (auto-described){' - needs human review' if x['review'] else ''}" if x["photo"] else "")
                 + (f"; family alert: {x['alert']}" if x["alert"] else "")
