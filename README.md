@@ -10,26 +10,11 @@ and Tharun Thomas Eapen (Mar Baselios College of Engineering and Technology).
 
 <!-- Add a demo GIF here: ![demo](docs/demo.gif) -->
 
-## Screenshots
+## Demo
 
-A Telegram-style test console with simulated seniors and family members (see "Telegram-style simulator" below).
+[**Open the full demo walkthrough**](docs/DEMO.md): an injury photo, the family alert with the real photo, natural-language messages to the senior, scam screenshots and multi-chat views, with the results on nine test images.
 
-**A senior sends an injury photo and gets calm, minimal guidance:**
-
-![Senior chat with an injury photo](docs/screenshots/01-senior-injury-photo.png)
-
-**Family receive a typed alert and the real photo, and can write naturally to the senior:**
-
-![Family view with alerts for two seniors](docs/screenshots/02-family-two-members-alerts.png)
-
-**Senior and family side by side, and a scam screenshot being checked:**
-
-![Bleeding hand: senior and family](docs/screenshots/03-bleeding-hand-senior-and-family.png)
-![Scam screenshots: senior and family](docs/screenshots/04-scam-screenshots-senior-and-family.png)
-
-**Several chats at once:**
-
-![Four chats side by side](docs/screenshots/05-four-chats-overview.png)
+[![Senior and family chats side by side](docs/screenshots/04-scam-screenshots-senior-and-family.png)](docs/DEMO.md)
 
 ## Features
 
@@ -124,6 +109,8 @@ cd sim-ui; npm install; npm run build; cd ..                         # once
 uv run python -m bia_hackaton_2026.telegram.bot                      # terminal 1: the real bot
 uv run python -m bia_hackaton_2026.sim.server                        # terminal 2: open http://127.0.0.1:8765
 ```
+
+The console also has hold-to-record voice input with a full-screen circular visualiser (the transcript is shown to edit before sending, Malayalam and English), four colour themes, and a **Settings → Usage** panel with live gauges for Groq rate limits, an estimate of Sarvam credits and calls per minute.
 
 Use `npm run dev` in `sim-ui/` (http://localhost:5173) while editing the UI. In the UI: the plus button adds a
 contact; the two layout buttons show one chat or several side by side; type `/` or press Menu for the commands.

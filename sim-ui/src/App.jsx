@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
+import Settings from "./Settings.jsx";
+import { VoiceOverlay, useVoice } from "./Voice.jsx";
+import { applyTheme, initialTheme } from "./theme.js";
 
-const COLORS = ["#e17076", "#7bc862", "#e5ca77", "#65aadd", "#a695e7", "#ee7aae", "#6ec9cb", "#faa774"];
+const COLORS = ["#b86b5e", "#6f9a72", "#b89b5e", "#5f8fae", "#8a7cb0", "#a8688c", "#5f9a9a", "#b98558"];
 const colorOf = (id) => COLORS[Number(id) % COLORS.length];
 // Overlapping polls can fetch the same messages twice; merging by id keeps each message once.
 const merge = (old = [], add = []) => {
@@ -36,12 +39,41 @@ function Linkified({ text, onCommand }) {
   return <>{out}</>;
 }
 
+const Icon = ({ d }) => <svg viewBox="0 0 24 24" aria-hidden="true">{d}</svg>;
+const CLIP = <path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9" />;
+const MIC = <><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></>;
+const SEND = <path d="M5 12h14M13 6l6 6-6 6" />;
+
+function Lightbox({ src, onClose }) {
+  useEffect(() => {
+    const k = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+  return (
+    <div className="lightbox" onClick={onClose}>
+      <img src={src} alt="" onClick={(e) => e.stopPropagation()} />
+      <button className="tool" title="Close (Esc)" onClick={onClose}>✕</button>
+    </div>
+  );
+}
+
 function Pane({ user, commands, messages, typing, onSend, onPhoto, onClose, onDelete, closable }) {
   const [text, setText] = useState("");
   const [menu, setMenu] = useState(false);
   const bottom = useRef(null);
   const inputRef = useRef(null);
   const fileRef = useRef(null);
+  const [pending, setPending] = useState(null);   // a photo waiting to be sent: { file, url }
+  const [viewer, setViewer] = useState(null);     // url of the photo shown full size
+
+  const stage = (file) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    setPending((old) => { if (old) URL.revokeObjectURL(old.url); return { file, url: URL.createObjectURL(file) }; });
+    inputRef.current?.focus();
+  };
+  const unstage = () => setPending((old) => { if (old) URL.revokeObjectURL(old.url); return null; });
+  const voice = useVoice();
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
@@ -55,6 +87,12 @@ function Pane({ user, commands, messages, typing, onSend, onPhoto, onClose, onDe
   }, [menu, typingCommand, text, commands]);
 
   const submit = (value) => {
+    if (value === undefined && pending) {   // the staged photo is sent now, with the typed text as its caption
+      onPhoto(pending.file, text.trim());
+      unstage();
+      setText("");
+      return;
+    }
     const v = (value ?? text).trim();
     if (!v) return;
     onSend(v);
@@ -76,7 +114,14 @@ function Pane({ user, commands, messages, typing, onSend, onPhoto, onClose, onDe
   };
 
   return (
-    <section className="pane">
+    <section className="pane"
+             onDragOver={(e) => e.dataTransfer?.types?.includes("Files") && e.preventDefault()}
+             onDrop={(e) => {
+               const img = [...(e.dataTransfer?.files || [])].find((f) => f.type.startsWith("image/"));
+               if (!img) return;
+               e.preventDefault();
+               stage(img);
+             }}>
       <header className="pane-head">
         <Avatar user={user} size={40} />
         <div className="pane-title">
@@ -92,7 +137,7 @@ function Pane({ user, commands, messages, typing, onSend, onPhoto, onClose, onDe
         {messages.map((m) => (
           <div key={m.id} className={`row ${m.direction === "out" ? "out" : "in"}`}>
             <div className="bubble">
-              {m.media && <img className="photo" src={`/api/media/${m.media}`} alt="" />}
+              {m.media && <img className="photo" src={`/api/media/${m.media}`} alt="" onClick={() => setViewer(`/api/media/${m.media}`)} />}
               <span className="text">
                 {m.direction === "in" ? <Linkified text={m.text} onCommand={onCommandLink} /> : m.text}
               </span>
@@ -119,14 +164,36 @@ function Pane({ user, commands, messages, typing, onSend, onPhoto, onClose, onDe
         </div>
       )}
 
+      {pending && (
+        <div className="staged">
+          <img src={pending.url} alt="" onClick={() => setViewer(pending.url)} />
+          <div className="staged-info"><b>Photo ready</b><span>Add a caption if you like, then press Send</span></div>
+          <button type="button" className="tool" title="Remove the photo" onClick={unstage}>✕</button>
+        </div>
+      )}
       <form className="composer" onSubmit={(e) => { e.preventDefault(); submit(); }}>
         <input ref={fileRef} type="file" accept="image/*" hidden
-               onChange={(e) => { const f = e.target.files[0]; if (f) onPhoto(f, text.trim()); setText(""); e.target.value = ""; }} />
-        <button type="button" className="icon" title="Send a photo" onClick={() => fileRef.current?.click()}>📎</button>
-        <button type="button" className={`menu-btn ${menu ? "on" : ""}`} onClick={() => setMenu(!menu)}>☰ Menu</button>
-        <input ref={inputRef} value={text} onChange={(e) => setText(e.target.value)} placeholder="Message" autoFocus />
-        <button type="submit" className="send" disabled={!text.trim()}>➤</button>
+               onChange={(e) => { stage(e.target.files[0]); e.target.value = ""; }} />
+        <button type="button" className="tool" title="Attach a photo" onClick={() => fileRef.current?.click()}><Icon d={CLIP} /></button>
+        <button type="button" className={`menu-btn ${menu ? "on" : ""}`} onClick={() => setMenu(!menu)}>Menu</button>
+        <input ref={inputRef} className="msg" value={text} onChange={(e) => setText(e.target.value)} placeholder="Message" autoFocus
+               onPaste={(e) => {   // Ctrl+V with an image on the clipboard stages it above the box; Send (or Enter) sends it
+                 const img = [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith("image/"));
+                 if (!img) return;
+                 e.preventDefault();
+                 stage(img);
+               }} />
+        <button type="button" className={`tool ${voice.phase === "recording" ? "on" : ""}`} title="Click to record a voice message, click again to finish"
+                onClick={voice.toggle}><Icon d={MIC} /></button>
+        <button type="submit" className="send" disabled={!text.trim() && !pending}><Icon d={SEND} /></button>
       </form>
+      {viewer && <Lightbox src={viewer} onClose={() => setViewer(null)} />}
+      {voice.phase !== "idle" && (
+        <VoiceOverlay phase={voice.phase} elapsed={voice.elapsed} result={voice.result} error={voice.error} getData={voice.getData}
+                      onChangeText={(t) => voice.setResult((r) => ({ ...r, text: t }))}
+                      onSend={(t) => { if (t.trim()) onSend(t.trim()); voice.close(); }} onClose={voice.close} onStop={voice.stop}
+                      lang={voice.lang} setLang={voice.setLang} onRetry={voice.retry} />
+      )}
     </section>
   );
 }
@@ -142,6 +209,14 @@ export default function App() {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
+  const [theme, setThemeState] = useState(initialTheme);
+  const [settings, setSettings] = useState(() => {
+    const q = new URLSearchParams(window.location.search).get("settings");
+    return q === "usage" || q === "appearance" ? q : null;
+  });
+  const [preview] = useState(() => new URLSearchParams(window.location.search).get("preview"));
+  const setTheme = (id) => setThemeState(id);
+  useEffect(() => { applyTheme(theme); }, [theme]);
   const msgsRef = useRef(msgs);
   msgsRef.current = msgs;
   const openRef = useRef(open);
@@ -251,6 +326,7 @@ export default function App() {
             <button className={layout === "single" ? "on" : ""} onClick={() => switchLayout("single")}>▢</button>
             <button className={layout === "split" ? "on" : ""} onClick={() => switchLayout("split")}>▥</button>
           </div>
+          <button className="icon" title="Settings and usage" onClick={() => setSettings("appearance")}>⚙</button>
           <button className="icon add" title="New simulated user" onClick={() => setAdding(true)}>＋</button>
         </div>
         <div className="chat-list">
@@ -305,6 +381,12 @@ export default function App() {
         )}
       </main>
 
+      {settings && <Settings onClose={() => setSettings(null)} theme={theme} setTheme={setTheme} initialTab={settings} />}
+      {preview && (
+        <VoiceOverlay preview lang="auto" setLang={() => {}} phase={preview === "review" ? "review" : "recording"} elapsed={7.4} getData={() => null} onClose={() => {}}
+                      result={{ text: "എനിക്ക് ഇന്ന് രാവിലെ മുതൽ നെഞ്ചിൽ വേദന ഉണ്ട്, കൂടെ തലകറക്കവും ഉണ്ട്. I am alone at home.", language: "ml-mix", provider: "sarvam", seconds: 2.1 }}
+                      onChangeText={() => {}} onSend={() => {}} />
+      )}
       {adding && (
         <div className="modal-bg" onClick={() => setAdding(false)}>
           <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={addUser}>

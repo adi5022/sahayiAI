@@ -120,6 +120,10 @@ async def respond(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Activate the bot for this chat and start a fresh conversation."""
+    if is_family_chat(update):   # a family member pressing /start again: reset nothing, point to what they can do
+        await update.message.reply_text(
+            "You are connected as family. Ask me about them in your own words, for example: How is she today?\n\n" + HELP_FAMILY)
+        return
     reset_chat(update.effective_chat.id)
     code = store.get_or_create_elder(update.effective_chat.id, update.effective_user.first_name or "")
     await update.message.reply_text(WELCOME)
@@ -192,11 +196,13 @@ async def family_leave(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 def is_family_chat(update: Update) -> bool:
     """Connected family member who is not themselves a senior using the bot (one-account demos keep the senior flow)."""
     cid = update.effective_chat.id
-    return store.is_family(cid) and not is_elder(cid)
+    # Everyone presses /start first, which registers them as a member. A family member is whoever is linked to a member
+    # and has nobody following them as a member themselves.
+    return store.is_family(cid) and not store.is_followed(cid)
 
 
 RELAY_INTENT = re.compile(r"^\s*(ask|tell|let|remind|message|send)\b", re.I)
-THIRD_PERSON = re.compile(r"\b(how is|how's|is he|is she|he|she|him|her|his|elder|member)\b", re.I)
+THIRD_PERSON = re.compile(r"\b(how is|how's|is he|is she|he|she|him|her|his|elder|member|patient|status|condition|situation)\b", re.I)
 
 NOT_FAMILY ="You are not connected to any member. Ask them for their family code and send /family CODE."
 
@@ -358,7 +364,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     # One-account demo: this chat is both the member and a family contact. Questions about a third person
     # ("how is he now", "the elder", "she") go to the family Q&A; everything else stays the member conversation.
-    dual_family_question = store.is_family(cid) and is_elder(cid) and (RELAY_INTENT.match(text) or THIRD_PERSON.search(text))
+    dual_family_question = store.is_family(cid) and store.is_followed(cid) and (RELAY_INTENT.match(text) or THIRD_PERSON.search(text))
     if is_family_chat(update) or dual_family_question:
         await family_question(update, context, text)
         return
@@ -369,12 +375,12 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     media = update.message.voice or update.message.audio
     data = await download_bytes(media)
     if is_family_chat(update):  # a family member asking by voice
-        stt = await asyncio.to_thread(detect_and_transcribe, data, "voice.ogg")
+        stt = await asyncio.to_thread(detect_and_transcribe, data, "voice.ogg", None, None, getattr(media, "duration", None))
         await family_question(update, context, stt["text"])
         return
-    if store.is_family(update.effective_chat.id) and is_elder(update.effective_chat.id):
+    if store.is_family(update.effective_chat.id) and store.is_followed(update.effective_chat.id):
         # One-account demo: decide by what was said, exactly like text ("tell him to relax" is a family request)
-        stt = await asyncio.to_thread(detect_and_transcribe, data, "voice.ogg")
+        stt = await asyncio.to_thread(detect_and_transcribe, data, "voice.ogg", None, None, getattr(media, "duration", None))
         said = stt["text"]
         if said and (RELAY_INTENT.match(said) or THIRD_PERSON.search(said)):
             await family_question(update, context, said)
@@ -383,7 +389,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await respond(update, context, text=said)
             return
     # Telegram voice notes are OGG/Opus; our STT accepts them as is
-    await respond(update, context, text=update.message.caption or "", audio=(data, "voice.ogg"))
+    await respond(update, context, text=update.message.caption or "", audio=(data, "voice.ogg", getattr(media, "duration", None)))
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

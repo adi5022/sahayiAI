@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS virtual_users(chat_id TEXT PRIMARY KEY, name TEXT, cr
 CREATE INDEX IF NOT EXISTS idx_virtual_chat ON virtual_inbox(chat_id, id);
 CREATE TABLE IF NOT EXISTS memory_notes(id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT, ts REAL, category TEXT, level INTEGER, note TEXT);
 CREATE INDEX IF NOT EXISTS idx_notes_chat ON memory_notes(chat_id, id);
+CREATE TABLE IF NOT EXISTS usage_log(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, provider TEXT, model TEXT, kind TEXT, ok INTEGER, status INTEGER, tokens_in INTEGER, tokens_out INTEGER, seconds REAL, audio_seconds REAL, rl_req_rem REAL, rl_req_lim REAL, rl_tok_rem REAL, rl_tok_lim REAL);
+CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_log(ts);
+CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, ts);
 CREATE INDEX IF NOT EXISTS idx_history_chat ON history(chat_id, id);
 """
@@ -134,6 +137,11 @@ def add_message(chat_id, level: int, said: str, reply: str, alert: str, photo: b
          (str(chat_id), time.time(), level, said, reply, alert, int(photo), int(review), category))
 
 
+def is_followed(chat_id) -> bool:
+    """True if someone is linked to this chat as family, i.e. this chat is a member (senior) with family."""
+    return bool(_run("SELECT 1 FROM family WHERE elder_chat_id=? LIMIT 1", (str(chat_id),), many=True))
+
+
 def recent_messages(chat_id, limit: int = 12) -> list[dict]:
     rows = _run("SELECT * FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT ?", (str(chat_id), limit), many=True)
     return rows[::-1]
@@ -159,6 +167,15 @@ def load_history(chat_id, limit: int = 20) -> list[dict]:
 
 def clear_history(chat_id) -> None:
     _run("DELETE FROM history WHERE chat_id=?", (str(chat_id),))
+
+
+def kv_get(key: str):
+    r = _run("SELECT value FROM kv WHERE key=?", (key,), many=True)
+    return r[0]["value"] if r else None
+
+
+def kv_set(key: str, value: str) -> None:
+    _run("INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
 
 
 # ---------- long-term member notes (medical history, incidents) ----------

@@ -8,6 +8,7 @@ receive its alerts and /tell it; a simulated user can also be a senior and talk 
 """
 import asyncio
 import os
+import time
 from pathlib import Path
 
 import uvicorn
@@ -18,8 +19,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from bia_hackaton_2026.llm import usage
 from bia_hackaton_2026.pipeline import store
 from bia_hackaton_2026.sim import live
+from bia_hackaton_2026.stt.detect import classify_text, detect_and_transcribe
+from bia_hackaton_2026.stt.transcribe import transcribe_audio
 from bia_hackaton_2026.telegram.bot import COMMANDS
 
 load_dotenv()
@@ -119,6 +123,51 @@ async def send_photo(chat_id: int, photo: UploadFile = File(...), caption: str =
     _TASKS.add(task)
     task.add_done_callback(_TASKS.discard)
     return {"ok": True}
+
+
+@app.post("/api/transcribe")
+async def transcribe(audio: list[UploadFile] = File(...), durations: str = Form(""), language: str = Form("auto")):
+    """Voice note -> text. The browser sends the recording in segments of at most 25 s (Sarvam rejects audio over 30 s).
+    language: "en" = Whisper only (no Sarvam credits used), "ml" = Sarvam only, "auto" = detect (Sarvam first, then Whisper for English).
+    Nothing is sent to a chat."""
+    files = [(await f.read(), f.filename or "voice.webm") for f in audio]
+    if not files or any(not d for d, _ in files) or sum(len(d) for d, _ in files) > 25 * 1024 * 1024:
+        raise HTTPException(400, "audio missing or larger than 25 MB")
+    durs = [float(x) if x.strip() else None for x in durations.split(",")] if durations else []
+
+    def one(i: int):
+        data, name = files[i]
+        d = durs[i] if i < len(durs) else None
+        if language == "en":
+            return transcribe_audio(data, name, "en", None, None, d)
+        if language == "ml":
+            return transcribe_audio(data, name, "ml-mix", None, None, d)
+        r = detect_and_transcribe(data, name, None, None, d)
+        return r["text"], r["provider"], r["error"]
+
+    t0 = time.perf_counter()
+    results = await asyncio.gather(*[asyncio.to_thread(one, i) for i in range(len(files))])
+    text = " ".join(t for t, _, _ in results if t).strip()
+    err = next((e for _, _, e in results if e), "")
+    providers = {p for _, p, _ in results}
+    return {"text": text, "language": classify_text(text)[0] if text else "unknown",
+            "provider": "sarvam" if "sarvam" in providers else "groq", "error": "" if text else err,
+            "seconds": round(time.perf_counter() - t0, 2), "segments": len(files)}
+
+
+class SarvamBalance(BaseModel):
+    credits_left: float
+
+
+@app.get("/api/usage")
+def get_usage():
+    return usage.summary()
+
+
+@app.post("/api/usage/sarvam-credits")
+def set_sarvam_credits(body: SarvamBalance):
+    usage.set_sarvam_balance(body.credits_left)
+    return usage.summary()["sarvam"]
 
 
 @app.get("/api/media/{name}")

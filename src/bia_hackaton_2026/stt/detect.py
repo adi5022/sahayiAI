@@ -5,15 +5,15 @@ script of the transcript. Whisper's own language detection is not used because i
 Malayalam with Tamil. English results are re-transcribed with Groq Whisper (language pinned)."""
 import time
 
-from .transcribe import transcribe_audio
+from .transcribe import transcribe_audio, trim_head, whisper_detect
 
 MODELS = {"sarvam": "saaras:v3", "groq": "whisper-large-v3"}
 
 
-def timed_step(label, mode, file_bytes, filename, lang, sarvam_key, groq_key):
+def timed_step(label, mode, file_bytes, filename, lang, sarvam_key, groq_key, duration=None):
     """Run one STT call; return (text, provider, error, trace_row)."""
     t0 = time.perf_counter()
-    text, provider, err = transcribe_audio(file_bytes, filename, lang, sarvam_key, groq_key)
+    text, provider, err = transcribe_audio(file_bytes, filename, lang, sarvam_key, groq_key, duration)
     row = {"step": label, "provider": provider, "model": MODELS.get(provider, "-"), "mode": mode,
            "seconds": round(time.perf_counter() - t0, 2), "chars": len(text), "ok": bool(text), "error": err}
     return text, provider, err, row
@@ -37,20 +37,31 @@ def classify_text(text: str) -> tuple[str, float]:
     return "ml-mix", ml_share
 
 
-def detect_and_transcribe(file_bytes, filename, sarvam_key=None, groq_key=None):
-    """Returns dict: text, language, provider, ml_share, error, trace (list of step rows), first_pass."""
+def detect_and_transcribe(file_bytes, filename, sarvam_key=None, groq_key=None, duration=None):
+    """Returns dict: text, language, provider, ml_share, error, trace (list of step rows), first_pass.
+
+    Free-first routing: one Groq Whisper call listens to the audio. If Whisper says the language is English, its transcript is
+    used and Sarvam is never called (no credits). Anything else goes to Sarvam in code-mix mode. Whisper is only trusted for
+    "English or not", never for Malayalam. Tested on 22 recordings: all 6 English clips were detected as English, and 10 of 11
+    Malayalam clips were not; English-dominant mixed speech can be taken for English, so a language can also be chosen by hand."""
     trace = []
-    text, provider, err, row = timed_step("1. detect + transcribe", "codemix", file_bytes, filename, "ml-mix", sarvam_key, groq_key)
+    t0 = time.perf_counter()
+    long_audio = (duration or len(file_bytes) / 4500) > 20
+    # Long recordings: the language check only needs the first 8 seconds, which is much faster than transcribing all of it
+    probe, probe_name = (trim_head(file_bytes, 8.0), "head.wav") if long_audio else (file_bytes, filename)
+    wlang, wtext, werr = whisper_detect(probe, probe_name, groq_key, None if long_audio else duration)
+    trace.append({"step": "1. Whisper language check", "provider": "groq", "model": MODELS["groq"], "mode": f"detected={wlang or '?'}",
+                  "seconds": round(time.perf_counter() - t0, 2), "chars": len(wtext), "ok": bool(wtext), "error": werr})
+    if wlang == "english" and wtext and long_audio:   # English: now transcribe the whole recording (free, Whisper only)
+        full, fprov, ferr, row = timed_step("2. English transcript", "language=en", file_bytes, filename, "en", sarvam_key, groq_key, duration)
+        trace.append(row)
+        if full:
+            return {"text": full, "language": "en", "provider": fprov, "ml_share": 0.0, "error": "", "trace": trace, "first_pass": wtext}
+    elif wlang == "english" and wtext:
+        return {"text": wtext, "language": "en", "provider": "groq", "ml_share": 0.0, "error": "", "trace": trace, "first_pass": wtext}
+    text, provider, err, row = timed_step("3. Sarvam (not English)", "codemix", file_bytes, filename, "ml-mix", sarvam_key, groq_key, duration)
     trace.append(row)
     if not text:
-        return {"text": "", "language": "unknown", "provider": provider, "ml_share": 0.0, "error": err,
-                "trace": trace, "first_pass": ""}
-    first_pass = text
+        return {"text": "", "language": "unknown", "provider": provider, "ml_share": 0.0, "error": err, "trace": trace, "first_pass": ""}
     lang, share = classify_text(text)
-    if lang == "en":
-        en_text, en_provider, _, row = timed_step("2. English re-transcribe", "language=en", file_bytes, filename, "en", sarvam_key, groq_key)
-        trace.append(row)
-        if en_text:
-            text, provider = en_text, en_provider
-    return {"text": text, "language": lang, "provider": provider, "ml_share": share, "error": "",
-            "trace": trace, "first_pass": first_pass}
+    return {"text": text, "language": lang, "provider": provider, "ml_share": share, "error": "", "trace": trace, "first_pass": text}

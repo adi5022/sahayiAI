@@ -7,7 +7,7 @@ import threading
 import time
 
 from bia_hackaton_2026.agent import run_turn
-from bia_hackaton_2026.pipeline import memory, store
+from bia_hackaton_2026.pipeline import memory, safety, store
 from bia_hackaton_2026.stt.detect import detect_and_transcribe
 from bia_hackaton_2026.pipeline.guard import OFF_TOPIC_REPLY, is_coding_request, looks_like_code
 from bia_hackaton_2026.vlm import build_agent_input, describe_verified
@@ -70,7 +70,7 @@ def handle_message(
             parts.append(text.strip())
 
         if audio:
-            stt = detect_and_transcribe(audio[0], audio[1])
+            stt = detect_and_transcribe(audio[0], audio[1], duration=(audio[2] if len(audio) > 2 else None))
             out["language"] = stt["language"]
             if stt["text"]:
                 out["transcript"] = stt["text"]
@@ -108,6 +108,10 @@ def handle_message(
         # the transport (Telegram) delivers messages itself; long-term notes go in as background, not as turns
         res = run_turn(agent_input, work, background=memory.background_block(chat_id), **kw)
         turn = res["turn"]
+        # Safety floor: only ever raises. Looks at the member's recent words, not just this message.
+        hit = safety.check([e["content"] for e in work[:before] if e["role"] == "user"][-3:] + [agent_input])
+        if hit and safety.apply(res, hit):
+            print(f"[SAHAYI] safety floor raised chat={chat_id} to level {hit.level} ({hit.reason})")
         new = [dict(e, ts=time.time(), cat=turn.family.category) for e in work[before:]]
         full.extend(new)
         store.add_history(chat_id, new)  # persist this exchange

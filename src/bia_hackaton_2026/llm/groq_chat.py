@@ -15,6 +15,8 @@ import groq
 import openai
 from groq import Groq
 
+from bia_hackaton_2026.llm import usage
+
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 
 # Models checked against this project's accounts. Order = preference. Every one was run on the same urgency scenarios as the
@@ -74,9 +76,17 @@ def _groq_call(model, messages, api_key, json_mode, temperature, max_tokens, tim
     kw = {"response_format": {"type": "json_object"}} if json_mode else {}
     if max_tokens:
         kw["max_completion_tokens"] = max_tokens
-    r = Groq(api_key=key, timeout=timeout, max_retries=0).chat.completions.create(
+    raw = Groq(api_key=key, timeout=timeout, max_retries=0).chat.completions.with_raw_response.create(
         model=model, messages=messages, temperature=temperature, reasoning_effort="low", **kw)
-    return r.choices[0].message.content or ""
+    r = raw.parse()
+    u = getattr(r, "usage", None)
+    meta = {"tokens_in": getattr(u, "prompt_tokens", 0), "tokens_out": getattr(u, "completion_tokens", 0), "headers": raw.headers}
+    return r.choices[0].message.content or "", meta
+
+
+def _nv_meta(r) -> dict:
+    u = getattr(r, "usage", None)
+    return {"tokens_in": getattr(u, "prompt_tokens", 0), "tokens_out": getattr(u, "completion_tokens", 0), "headers": None}
 
 
 def _nvidia_call(model, messages, json_mode, temperature, max_tokens, timeout):
@@ -88,11 +98,11 @@ def _nvidia_call(model, messages, json_mode, temperature, max_tokens, timeout):
         try:
             r = client.chat.completions.create(model=model, messages=messages, temperature=temperature,
                                                response_format={"type": "json_object"}, **kw)
-            return r.choices[0].message.content or ""
+            return r.choices[0].message.content or "", _nv_meta(r)
         except openai.BadRequestError:
             pass  # this model does not do JSON mode: ask without it (the caller validates the JSON anyway)
     r = client.chat.completions.create(model=model, messages=messages, temperature=temperature, **kw)
-    return r.choices[0].message.content or ""
+    return r.choices[0].message.content or "", _nv_meta(r)
 
 
 _RETRYABLE = (groq.APIConnectionError, groq.APITimeoutError, groq.InternalServerError,
@@ -114,16 +124,20 @@ def chat(messages: list[dict], models: tuple[str, ...] = AGENT_CHAIN, api_key: s
     last: Exception | None = None
     for entry in order:
         provider, model = _split(entry)
+        t0 = time.perf_counter()
         try:
             if provider == "nvidia":
-                text = _nvidia_call(model, messages, json_mode, temperature, max_tokens, max(timeout, 25.0))  # slow model, last resort
+                text, meta = _nvidia_call(model, messages, json_mode, temperature, max_tokens, max(timeout, 25.0))  # slow model, last resort
             else:
-                text = _groq_call(model, messages, api_key, json_mode, temperature, max_tokens, timeout)
+                text, meta = _groq_call(model, messages, api_key, json_mode, temperature, max_tokens, timeout)
         except _RATE as e:
+            usage.record(provider, model, "chat", False, 429, seconds=time.perf_counter() - t0,
+                         headers=getattr(getattr(e, "response", None), "headers", None))
             _BLOCKED_UNTIL[entry] = time.time() + _retry_after(e)
             print(f"[SAHAYI] {entry} rate limited, trying the next model")
             last = e
         except _RETRYABLE as e:
+            usage.record(provider, model, "chat", False, 0, seconds=time.perf_counter() - t0)
             _BLOCKED_UNTIL[entry] = time.time() + 10
             print(f"[SAHAYI] {entry} unreachable ({type(e).__name__}), trying the next model")
             last = e
@@ -138,6 +152,7 @@ def chat(messages: list[dict], models: tuple[str, ...] = AGENT_CHAIN, api_key: s
             print(f"[SAHAYI] {entry} failed ({e.status_code}), trying the next model")
             last = e
         else:
+            usage.record(provider, model, "chat", True, 200, seconds=time.perf_counter() - t0, **meta)
             LAST_MODEL_USED = entry
             return text
     raise last or RuntimeError("no model available")

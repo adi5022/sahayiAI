@@ -15,6 +15,7 @@ from groq import Groq
 from google import genai
 from google.genai import types
 
+from bia_hackaton_2026.llm import usage
 from bia_hackaton_2026.vlm.describe import SYSTEM_PROMPT, VLM_MODEL, describe_image
 
 # flash-lite: consistently 2-3 s. gemini-3.5-flash was 5-31 s on the free tier (it "thinks" ~400 tokens).
@@ -63,11 +64,16 @@ def _gemini_call(client, contents, system: str, json_mode: bool = False, models=
                 system_instruction=system, temperature=0.2,
                 response_mime_type="application/json" if json_mode else None,
             )
+            _t0 = time.perf_counter()
             r = client.models.generate_content(model=model, contents=contents, config=cfg)
+            _u = getattr(r, "usage_metadata", None)
+            usage.record("gemini", model, "vision", bool(r.text and r.text.strip()), 200, getattr(_u, "prompt_token_count", 0) or 0,
+                         getattr(_u, "candidates_token_count", 0) or 0, time.perf_counter() - _t0)
             if r.text and r.text.strip():
                 return r.text.strip(), model
             last = RuntimeError("empty response")
         except Exception as e:  # 503 high demand, quota, etc.
+            usage.record("gemini", model, "vision", False, getattr(e, "code", 0) or 0)
             last = e
     raise last or RuntimeError("Gemini unavailable")
 
@@ -89,6 +95,8 @@ def _judge_groq(image_bytes: bytes, mime: str, user_text: str, groq_key: str | N
         ],
         response_format={"type": "json_object"}, temperature=0.1, max_completion_tokens=900,
     )
+    _u = getattr(r, "usage", None)
+    usage.record("groq", VLM_MODEL, "vision", True, 200, getattr(_u, "prompt_tokens", 0), getattr(_u, "completion_tokens", 0))
     return (r.choices[0].message.content or "").strip(), VLM_MODEL
 
 

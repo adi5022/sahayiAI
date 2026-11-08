@@ -5,6 +5,8 @@ import time
 
 from groq import Groq
 
+from bia_hackaton_2026.llm import usage
+
 VLM_MODEL = "qwen/qwen3.8-27b"
 MAX_IMAGE_BYTES = 4 * 1024 * 1024  # Groq limit for base64-encoded images in a request
 
@@ -43,6 +45,8 @@ def describe_image(image_bytes: bytes, mime: str = "image/jpeg", user_text: str 
             max_completion_tokens=600,
         )
         text = (r.choices[0].message.content or "").strip()
+        u = getattr(r, "usage", None)
+        usage.record("groq", VLM_MODEL, "vision", bool(text), 200, getattr(u, "prompt_tokens", 0), getattr(u, "completion_tokens", 0), time.perf_counter() - t0)
         return {"description": text, "model": VLM_MODEL, "seconds": round(time.perf_counter() - t0, 2),
                 "error": "" if text else "Model returned an empty description."}
     except Exception as e:
