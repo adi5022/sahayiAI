@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from bia_hackaton_2026.llm import usage
-from bia_hackaton_2026.pipeline import store
+from bia_hackaton_2026.pipeline import reset_chat, store
 from bia_hackaton_2026.sim import live
 from bia_hackaton_2026.stt.detect import classify_text, detect_and_transcribe
 from bia_hackaton_2026.stt.transcribe import transcribe_audio
@@ -72,6 +72,7 @@ def add_user(body: NewUser):
 @app.delete("/api/users/{chat_id}")
 def delete_user(chat_id: int):
     store.delete_virtual_user(chat_id)
+    reset_chat(chat_id)   # also clears what the running server keeps in memory for this chat
     return {"ok": True}
 
 

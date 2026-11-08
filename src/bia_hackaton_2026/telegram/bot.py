@@ -15,6 +15,7 @@ from bia_hackaton_2026.llm.family_qa import answer_family_question, route_family
 from bia_hackaton_2026.notify.telegram_family import send_family_alert
 from bia_hackaton_2026.notify.transport import deliver
 from bia_hackaton_2026.pipeline import handle_message, reset_chat, store
+from bia_hackaton_2026.pipeline import safety
 from bia_hackaton_2026.pipeline.inbound import note_family_message
 from bia_hackaton_2026.pipeline.status import activity_log, is_elder, record, status_text
 from bia_hackaton_2026.pipeline.timeutil import fmt
@@ -248,6 +249,15 @@ async def relay_to_member(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         await update.message.reply_text("Write the message after the command, for example:\n/tell Please tell us where it hurts")
         return
     who = update.effective_user.first_name or "your family"
+    recent = [(store.recent_messages(e["chat_id"], 1) or [None])[-1] for e in elders]
+    active = any(m and m["level"] >= 2 and time.time() - m["ts"] < 3 * 3600 for m in recent)
+    reason = safety.risky_relay(msg, active)
+    if reason:   # Sahayi speaks to the member in its own voice, so it will not pass this on
+        await update.message.reply_text(
+            f"I did not send that, because {reason}. If they may be hurt, please call them now, or call 112 yourself.\n\n"
+            "Something I can send is: \"Please call 112 now. I am on my way.\" (use /tell followed by your own words.)")
+        print(f"[SAHAYI] relay blocked from family {cid}: {reason}")
+        return
     done, failed = [], []
     for e in elders:
         try:

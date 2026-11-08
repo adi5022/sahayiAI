@@ -16,6 +16,7 @@ from google import genai
 from google.genai import types
 
 from bia_hackaton_2026.llm import usage
+from bia_hackaton_2026.llm.groq_chat import key_tag, with_groq_keys
 from bia_hackaton_2026.vlm.describe import SYSTEM_PROMPT, VLM_MODEL, describe_image
 
 # flash-lite: consistently 2-3 s. gemini-3.5-flash was 5-31 s on the free tier (it "thinks" ~400 tokens).
@@ -84,7 +85,7 @@ def _judge_groq(image_bytes: bytes, mime: str, user_text: str, groq_key: str | N
     if not key:
         raise RuntimeError("Groq API key missing")
     b64 = base64.b64encode(image_bytes).decode()
-    r = Groq(api_key=key, timeout=20).chat.completions.create(
+    r = with_groq_keys(lambda client: client.chat.completions.create(
         model=VLM_MODEL,
         messages=[
             {"role": "system", "content": JUDGE_PROMPT},
@@ -94,9 +95,9 @@ def _judge_groq(image_bytes: bytes, mime: str, user_text: str, groq_key: str | N
             ]},
         ],
         response_format={"type": "json_object"}, temperature=0.1, max_completion_tokens=900,
-    )
+    ), key, "vision", 20.0, VLM_MODEL)
     _u = getattr(r, "usage", None)
-    usage.record("groq", VLM_MODEL, "vision", True, 200, getattr(_u, "prompt_tokens", 0), getattr(_u, "completion_tokens", 0))
+    usage.record("groq", VLM_MODEL + key_tag(), "vision", True, 200, getattr(_u, "prompt_tokens", 0), getattr(_u, "completion_tokens", 0))
     return (r.choices[0].message.content or "").strip(), VLM_MODEL
 
 

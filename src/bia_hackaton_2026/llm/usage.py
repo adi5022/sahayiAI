@@ -46,6 +46,19 @@ def record(provider: str, model: str, kind: str = "chat", ok: bool = True, statu
         pass
 
 
+def note_limit(label: str, message: str) -> None:
+    """Groq's 429 text says exactly how much of a limit is used ("tokens per day (TPD): Limit 200000, Used 199127, Requested 3693").
+    That is the real figure (it includes usage Sahayi did not make), so it is stored and shown next to our own count."""
+    import json
+    import re
+    try:
+        m = re.search(r"\((\w+)\): Limit (\d+), Used (\d+)", message or "")
+        if m:
+            _store().kv_set(f"limit:{label}", json.dumps({"abbr": m.group(1), "limit": int(m.group(2)), "used": int(m.group(3)), "ts": time.time()}))
+    except Exception:
+        pass
+
+
 def set_sarvam_balance(credits_left: float) -> None:
     _store().kv_set("sarvam_credits_left", str(credits_left))
     _store().kv_set("sarvam_credits_since", str(time.time()))
@@ -86,4 +99,15 @@ def summary() -> dict:
         sarvam.update(baseline=float(left), since=float(since), spent_since=round(spent, 2),
                       estimated_left=round(max(float(left) - spent, 0.0), 2))
     t = _store()._run("SELECT MIN(ts) first, COUNT(*) n FROM usage_log", many=True)[0]
-    return {"now": now, "tracking": {"since": t["first"], "total_calls": t["n"]}, "models": models, "series": series, "sarvam": sarvam, "groq_daily_tokens": GROQ_DAILY_TOKENS}
+    import json
+    import os
+    limits = {}
+    for r in _store()._run("SELECT key, value FROM kv WHERE key LIKE 'limit:%'", many=True):
+        try:
+            limits[r["key"][6:]] = json.loads(r["value"])
+        except ValueError:
+            pass
+    config = {"groq_keys": 1 + sum(1 for i in (2, 3) if (os.environ.get(f"GROQ_API_KEY_{i}") or "").strip()),
+              "gemini": bool((os.environ.get("GEMINI_API_KEY") or "").strip()),
+              "nvidia": bool((os.environ.get("NVIDIA_API_KEY") or "").strip() and os.environ.get("NVIDIA_FALLBACK") == "1")}
+    return {"limits": limits, "config": config, "now": now, "tracking": {"since": t["first"], "total_calls": t["n"]}, "models": models, "series": series, "sarvam": sarvam, "groq_daily_tokens": GROQ_DAILY_TOKENS}

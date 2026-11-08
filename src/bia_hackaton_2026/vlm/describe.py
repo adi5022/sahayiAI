@@ -6,6 +6,7 @@ import time
 from groq import Groq
 
 from bia_hackaton_2026.llm import usage
+from bia_hackaton_2026.llm.groq_chat import key_tag, with_groq_keys
 
 VLM_MODEL = "qwen/qwen3.8-27b"
 MAX_IMAGE_BYTES = 4 * 1024 * 1024  # Groq limit for base64-encoded images in a request
@@ -32,7 +33,7 @@ def describe_image(image_bytes: bytes, mime: str = "image/jpeg", user_text: str 
     question = f"User's message: {user_text}\n\nDescribe the image." if user_text.strip() else "Describe the image."
     t0 = time.perf_counter()
     try:
-        r = Groq(api_key=groq_key.strip()).chat.completions.create(
+        r = with_groq_keys(lambda client: client.chat.completions.create(
             model=VLM_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -43,10 +44,10 @@ def describe_image(image_bytes: bytes, mime: str = "image/jpeg", user_text: str 
             ],
             temperature=0.2,
             max_completion_tokens=600,
-        )
+        ), groq_key, "vision", 30.0, VLM_MODEL)
         text = (r.choices[0].message.content or "").strip()
         u = getattr(r, "usage", None)
-        usage.record("groq", VLM_MODEL, "vision", bool(text), 200, getattr(u, "prompt_tokens", 0), getattr(u, "completion_tokens", 0), time.perf_counter() - t0)
+        usage.record("groq", VLM_MODEL + key_tag(), "vision", bool(text), 200, getattr(u, "prompt_tokens", 0), getattr(u, "completion_tokens", 0), time.perf_counter() - t0)
         return {"description": text, "model": VLM_MODEL, "seconds": round(time.perf_counter() - t0, 2),
                 "error": "" if text else "Model returned an empty description."}
     except Exception as e:

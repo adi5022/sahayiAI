@@ -30,7 +30,7 @@ def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: 
             raw = ask_llm(user_input, history[-MEMORY_LIMIT:], model, api_key, background=background)
         except Exception as e:
             error = f"LLM call failed: {e}"
-            continue
+            break   # every model was already tried (and waited for) inside ask_llm; trying again only doubles the delay
         turn = parse_response(raw)
         if turn is not None and validate_turn(turn):
             error = ""
@@ -41,7 +41,7 @@ def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: 
     fallback = turn is None
     if fallback:
         turn = Turn(
-            user={"text": "I couldn't understand that. Please tell me again.", "follow_up": None},
+            user={"text": "I am having trouble answering right now. If you are hurt or need urgent help, call 112 or ask someone nearby.", "follow_up": None},
             family={"summary": "Sahayi could not process the user's message.", "suggested_level": 1, "send": False},
         )
 

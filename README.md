@@ -115,6 +115,8 @@ The console also has hold-to-record voice input with a full-screen circular visu
 Use `npm run dev` in `sim-ui/` (http://localhost:5173) while editing the UI. In the UI: the plus button adds a
 contact; the two layout buttons show one chat or several side by side; type `/` or press Menu for the commands.
 
+Optional: set `GROQ_API_KEY_2` and `GROQ_API_KEY_3` in `.env` (keys from other Groq accounts). When the first key has used up its daily tokens, chat, Whisper speech and photo-check requests move on to the next key automatically (chat keys appear separately in the Usage panel).
+
 ### Commands
 
 Members: `/start`, `/code`, `/newcode`, `/help`.

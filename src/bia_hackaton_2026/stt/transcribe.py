@@ -7,6 +7,7 @@ import requests
 from groq import Groq
 
 from bia_hackaton_2026.llm import usage
+from bia_hackaton_2026.llm.groq_chat import key_tag, with_groq_keys
 
 SARVAM_URL = "https://api.sarvam.ai/speech-to-text"
 
@@ -107,12 +108,12 @@ def transcribe_audio(
     t0 = time.perf_counter()
     secs = duration or len(file_bytes) / 4500
     try:
-        buf = io.BytesIO(file_bytes)
-        buf.name = filename
-        t = Groq(api_key=groq_key.strip()).audio.transcriptions.create(
-            file=(filename, buf), model="whisper-large-v3", language="en", response_format="json"
-        )
-        usage.record("groq", "whisper-large-v3", "stt", True, 200, seconds=time.perf_counter() - t0, audio_seconds=secs)
+        def _call(client):
+            buf = io.BytesIO(file_bytes)
+            buf.name = filename
+            return client.audio.transcriptions.create(file=(filename, buf), model="whisper-large-v3", language="en", response_format="json")
+        t = with_groq_keys(_call, groq_key, "whisper", model="whisper-large-v3")
+        usage.record("groq", "whisper-large-v3" + key_tag(), "stt", True, 200, seconds=time.perf_counter() - t0, audio_seconds=secs)
         return t.text.strip(), "groq", ""
     except Exception as e:
         usage.record("groq", "whisper-large-v3", "stt", False, 0, seconds=time.perf_counter() - t0)
@@ -146,11 +147,12 @@ def whisper_detect(file_bytes: bytes, filename: str = "audio.wav", groq_key: str
     t0 = time.perf_counter()
     secs = duration or len(file_bytes) / 4500
     try:
-        buf = io.BytesIO(file_bytes)
-        buf.name = filename
-        t = Groq(api_key=groq_key.strip()).audio.transcriptions.create(
-            file=(filename, buf), model="whisper-large-v3", response_format="verbose_json")
-        usage.record("groq", "whisper-large-v3", "stt", True, 200, seconds=time.perf_counter() - t0, audio_seconds=secs)
+        def _call(client):
+            buf = io.BytesIO(file_bytes)
+            buf.name = filename
+            return client.audio.transcriptions.create(file=(filename, buf), model="whisper-large-v3", response_format="verbose_json")
+        t = with_groq_keys(_call, groq_key, "whisper", model="whisper-large-v3")
+        usage.record("groq", "whisper-large-v3" + key_tag(), "stt", True, 200, seconds=time.perf_counter() - t0, audio_seconds=secs)
         return (getattr(t, "language", "") or "").strip().lower(), (t.text or "").strip(), ""
     except Exception as e:
         usage.record("groq", "whisper-large-v3", "stt", False, 0, seconds=time.perf_counter() - t0)

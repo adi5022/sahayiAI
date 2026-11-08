@@ -89,3 +89,29 @@ def apply(res: dict, hit: Hit) -> bool:
     res["family_message"] = format_family_message(turn)
     res["family_sent"] = True
     return True
+
+
+# ---------- messages family ask Sahayi to pass on ----------
+# Sahayi speaks to the member in its own voice, so it must not carry harmful or dismissive instructions from family
+# ("put some mercury on the wound", "no need to call a doctor") to someone who may be hurt.
+_HARMFUL_THING = re.compile(r"\b(?:mercury|bleach|kerosene|petrol|diesel|phenyl|turpentine|pesticide|insecticide|acid|detergent|rat poison|battery)\b", _I)
+_WOUND_REMEDY = re.compile(r"\b(?:put|apply|rub|pour|spray|smear|dab|sprinkle)\b[^.!?]{0,40}\b(?:on|onto|over|into|in)\b[^.!?]{0,15}\b(?:wound|cut|burn|bite|injur\w*|eye|eyes|sore|bleeding)\b", _I)
+_SAFE_FIRST_AID = re.compile(r"\b(?:clean (?:cloth|water)|pressure|bandage|cold water|clean towel|sterile)\b", _I)
+_MEDICINE = re.compile(r"\b(?:take|swallow|drink|eat|have|give)\b[^.!?]{0,30}\b(?:tablets?|pills?|medicines?|medications?|doses?|capsules?|syrup|antibiotics?|painkillers?|aspirin|paracetamol|ibuprofen|alcohol)\b", _I)
+_DISCOURAGE_HELP = re.compile(r"\b(?:don'?t|do not|no need to|need not|never)\b[^.!?]{0,25}\b(?:call|go to|see|visit|bother)\b[^.!?]{0,25}\b(?:hospital|doctor|ambulance|112|police|clinic|help)\b", _I)
+_QUESTION = re.compile(r"\?\s*$|^\s*(?:did|have|has|are|is|do|does|can|could|will|would)\b", _I)
+
+
+def risky_relay(text: str, active_emergency: bool) -> str | None:
+    """Reason a message should NOT be passed to a member, or None when it is fine. Questions, reassurance and 'I am coming' are fine.
+    `active_emergency` = the member's latest report was level 2 or 3 recently; then medicine instructions are blocked too."""
+    t = (text or "").strip()
+    if _HARMFUL_THING.search(t):
+        return "it names a substance that can harm them"
+    if _DISCOURAGE_HELP.search(t):
+        return "it tells them not to get medical help"
+    if _WOUND_REMEDY.search(t) and not _SAFE_FIRST_AID.search(t):
+        return "it tells them to put something on an injury"
+    if active_emergency and _MEDICINE.search(t) and not _QUESTION.search(t):
+        return "it gives treatment or medicine instructions during an emergency"
+    return None

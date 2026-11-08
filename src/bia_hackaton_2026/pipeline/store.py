@@ -205,8 +205,10 @@ def is_virtual(chat_id) -> bool:
 
 def add_virtual_user(name: str) -> int:
     """Create a simulated Telegram user and return its chat id."""
+    # A counter that only goes up: an id is never handed out twice, so a new user can never inherit a deleted user's data.
     rows = _run("SELECT MAX(CAST(chat_id AS INTEGER)) AS m FROM virtual_users", many=True)
-    cid = max(VIRTUAL_BASE, rows[0]["m"] or 0) + 1
+    cid = max(VIRTUAL_BASE, rows[0]["m"] or 0, int(kv_get("virtual_last_id") or 0)) + 1
+    kv_set("virtual_last_id", str(cid))
     _run("INSERT INTO virtual_users(chat_id,name,created) VALUES(?,?,?)", (str(cid), name.strip(), time.time()))
     return cid
 
@@ -221,6 +223,8 @@ def delete_virtual_user(chat_id) -> None:
     _run("DELETE FROM virtual_inbox WHERE chat_id=?", (cid,))
     _run("DELETE FROM family WHERE chat_id=?", (cid,))
     _run("DELETE FROM elders WHERE chat_id=?", (cid,))
+    for table in ("messages", "history", "memory_notes"):   # everything the bot remembered about this user
+        _run(f"DELETE FROM {table} WHERE chat_id=?", (cid,))
 
 
 def media_dir() -> Path:

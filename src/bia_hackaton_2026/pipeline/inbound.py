@@ -7,6 +7,7 @@ import threading
 import time
 
 from bia_hackaton_2026.agent import run_turn
+from bia_hackaton_2026.message_processor.formatter import format_family_message
 from bia_hackaton_2026.pipeline import memory, safety, store
 from bia_hackaton_2026.stt.detect import detect_and_transcribe
 from bia_hackaton_2026.pipeline.guard import OFF_TOPIC_REPLY, is_coding_request, looks_like_code
@@ -112,6 +113,19 @@ def handle_message(
         hit = safety.check([e["content"] for e in work[:before] if e["role"] == "user"][-3:] + [agent_input])
         if hit and safety.apply(res, hit):
             print(f"[SAHAYI] safety floor raised chat={chat_id} to level {hit.level} ({hit.reason})")
+        if res["fallback"]:
+            # The model could not answer (service problem). Never leave a member who reported an emergency with a bland reply:
+            # repeat the safe instruction for their last situation and keep the family informed.
+            recent = [m for m in store.recent_messages(chat_id, 8) if time.time() - m["ts"] < 3 * 3600]
+            worst = max(recent, key=lambda m: m["level"], default=None)   # the worst recent situation, not just the last message
+            if worst and worst["level"] >= 2:
+                cat = worst.get("category") or "medical"
+                turn.family.suggested_level, turn.family.send, turn.family.category = worst["level"], True, cat
+                turn.family.summary = (f"Sahayi could not process the member's latest message because of a service problem. Earlier they were rated "
+                                       f"level {worst['level']} ({cat}). Please check on them now.")[:400]
+                res["user_message"] = safety.TEMPLATES.get(cat, safety.TEMPLATES["medical"])
+                res["family_message"] = format_family_message(turn)
+                res["family_sent"] = True
         new = [dict(e, ts=time.time(), cat=turn.family.category) for e in work[before:]]
         full.extend(new)
         store.add_history(chat_id, new)  # persist this exchange

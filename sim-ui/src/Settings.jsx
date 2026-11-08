@@ -77,11 +77,15 @@ function Activity({ series, now }) {
   );
 }
 
-// Models Sahayi can call, so the panel lists them all even before the first call of the day.
-const KNOWN = [
-  ["groq", "openai/gpt-oss-120b", "chat"], ["groq", "openai/gpt-oss-20b", "chat"], ["groq", "qwen/qwen3.8-27b", "chat, vision"],
-  ["groq", "whisper-large-v3", "stt"], ["gemini", "gemini-3.5-flash-lite", "vision"], ["nvidia", "meta/muse-glimmer-30b", "chat"],
+// Every model Sahayi can call. Rows for Groq are repeated for each configured key (Key 2 and 3 appear as "#2", "#3").
+const GROQ_BASE = [
+  ["openai/gpt-oss-120b", "Chat"], ["openai/gpt-oss-20b", "Chat"], ["qwen/qwen3.8-27b", "Chat, photos"], ["whisper-large-v3", "Speech"],
 ];
+const OTHER_BASE = [["gemini", "gemini-3.5-flash", "Chat, photos, audio"], ["gemini", "gemini-3.5-flash-lite", "Photos"]];
+const pretty = (m) => m.replace("openai/", "").replace("qwen/", "");
+const num = (n) => Math.round(n).toLocaleString();
+
+function Pill({ tone, children }) { return <span className={`pill ${tone || ""}`}>{children}</span>; }
 
 function Usage() {
   const [u, setU] = useState(null);
@@ -98,15 +102,16 @@ function Usage() {
   };
   useEffect(() => { load(); const t = setInterval(load, 3000); return () => clearInterval(t); }, []);
 
-  const models = useMemo(() => {
+  const rows = useMemo(() => {
+    if (!u) return [];
     const m = {};
-    KNOWN.forEach(([provider, model, kinds]) => { m[`${provider}|${model}`] = { provider, model, calls: 0, ok: 0, tokens: 0, audio: 0, lat: 0, last: null, kinds: kinds.split(", ") }; });
-    (u?.models || []).forEach((r) => {
-      const k = `${r.provider}|${r.model}`;
-      const e = (m[k] ||= { provider: r.provider, model: r.model, calls: 0, ok: 0, tokens: 0, audio: 0, lat: 0, last: null, kinds: [] });
-      if (e.calls === 0) e.kinds = [];
+    const blank = (provider, model, what) => ({ provider, model, what, calls: 0, ok: 0, tokens: 0, audio: 0, lat: 0, last: null });
+    const keys = u.config?.groq_keys || 1;
+    for (let k = 1; k <= keys; k++) GROQ_BASE.forEach(([model, what]) => { const label = k === 1 ? model : `${model}#${k}`; m[`groq|${label}`] = blank("groq", label, what); });
+    OTHER_BASE.forEach(([p, model, what]) => { if (p !== "gemini" || u.config?.gemini) m[`${p}|${model}`] = blank(p, model, what); });
+    (u.models || []).forEach((r) => {
+      const e = (m[`${r.provider}|${r.model}`] ||= blank(r.provider, r.model, r.kind === "stt" ? "Speech" : r.kind === "vision" ? "Photos" : "Chat"));
       e.calls += r.calls; e.ok += r.ok; e.tokens += r.tokens; e.audio += r.audio; e.lat += r.avg_s * r.calls;
-      if (!e.kinds.includes(r.kind)) e.kinds.push(r.kind);
       if (r.last && (!e.last || r.last.ts > e.last.ts)) e.last = r.last;
     });
     return Object.values(m).filter((e) => e.provider !== "sarvam");
@@ -125,72 +130,104 @@ function Usage() {
     setBal(""); setSaving(false); load();
   };
 
+  const used = rows.filter((r) => r.calls > 0);
+  const calls = used.reduce((a, r) => a + r.calls, 0) + (sarRow ? sarRow.calls : 0);
+  const failed = used.reduce((a, r) => a + (r.calls - r.ok), 0);
+  // A model is "out" when Groq says its daily tokens are (nearly) all used, or it was rate limited in the last two minutes.
+  const dailyFull = (r) => { const l = u.limits?.[r.model]; return l && l.abbr === "TPD" && l.used / l.limit >= 0.98 && now - l.ts < 3600; };
+  const recent429 = (r) => r.last && !r.last.ok && r.last.status === 429 && now - r.last.ts < 120;
+  const out = (r) => dailyFull(r) || recent429(r);
+  const chatRows = rows.filter((r) => r.provider === "groq" && r.what !== "Speech");
+  const outRows = chatRows.filter(out);
+  const health = outRows.length === 0 ? ["ok", "All good", "no limits hit"]
+    : outRows.length === chatRows.length ? ["bad", "Out of tokens", "every Groq chat model is limited"]
+    : ["warn", "Partly limited", `${outRows.length} of ${chatRows.length} Groq chat models limited`];
+
+  const status = (r) => {
+    if (!r.calls && !dailyFull(r)) return <Pill>Idle</Pill>;
+    if (dailyFull(r)) return <Pill tone="bad">Daily limit</Pill>;
+    if (recent429(r)) return <Pill tone="warn">Limited</Pill>;
+    if (r.last && !r.last.ok) return <Pill tone="bad">Error</Pill>;
+    return <Pill tone="ok">OK</Pill>;
+  };
+  const section = (title, list, note) => list.length > 0 && (
+    <div className="u-section">
+      <h4>{title}{note && <small>{note}</small>}</h4>
+      <div className="u-table">
+        <div className="u-row u-head"><span>Model</span><span>Used today</span><span>Status</span><span>Calls</span><span>Failed</span><span>Avg time</span><span>Last call</span></div>
+        {list.map((r) => {
+          const lim = u.limits?.[r.model];
+          const abbr = lim?.abbr;
+          const cap = r.provider === "groq" && r.what !== "Speech" ? u.groq_daily_tokens : 0;
+          const usedTok = abbr === "TPD" ? lim.used : r.tokens;
+          const capTok = abbr === "TPD" ? lim.limit : cap;
+          const lat = r.calls ? r.lat / r.calls : 0;
+          const [name, key] = pretty(r.model).split("#");
+          return (
+            <div className={`u-row ${r.calls ? "" : "idle"}`} key={`${r.provider}${r.model}`}>
+              <span className="u-model"><b>{name}</b>{key && <em>key {key}</em>}<small>{r.what}</small></span>
+              <span className="u-used">
+                {r.what === "Speech" ? <b>{(r.audio / 60).toFixed(1)} min audio</b> : capTok ? (
+                  <>
+                    <b>{kfmt(usedTok)} / {kfmt(capTok)}</b>
+                    <div className="bar"><i style={{ width: `${Math.min(100, (usedTok / capTok) * 100)}%`, background: colorFor(1 - usedTok / capTok) }} /></div>
+                    {abbr === "TPD" && <small>Groq says · {ago(now - lim.ts)}</small>}
+                  </>
+                ) : <b>{r.tokens ? `${kfmt(r.tokens)} tokens` : "–"}</b>}
+              </span>
+              <span>{status(r)}</span>
+              <span className="n">{r.calls || "–"}</span>
+              <span className={`n ${r.calls - r.ok ? "bad" : ""}`}>{r.calls ? r.calls - r.ok : "–"}</span>
+              <span className="n">{r.calls ? `${lat.toFixed(1)}s` : "–"}</span>
+              <span className="n">{r.last ? ago(now - r.last.ts) : "–"}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   return (
     <div>
-      <div className="u-top"><span className="live" /> Live, refreshes every 3 seconds · today so far · usage from the Telegram bot and this console</div>
-      <div className="u-grid">
+      <div className="u-top"><span className="live" /> Live, refreshes every 3 seconds · today so far · includes the Telegram bot and this console</div>
+      <div className="u-tiles">
+        <div className={`u-tile ${health[0]}`}><span>Right now</span><b>{health[1]}</b><small>{health[2]}</small></div>
+        <div className="u-tile"><span>Calls today</span><b>{num(calls)}</b><small>{failed} failed ({calls ? Math.round((failed / calls) * 100) : 0}%)</small></div>
+        <div className="u-tile"><span>Groq keys</span><b>{u.config?.groq_keys || 1}</b><small>{(u.config?.groq_keys || 1) > 1 ? "tried in order" : "add GROQ_API_KEY_2 for more"}</small></div>
+        <div className="u-tile"><span>Sarvam credits</span><b>{base != null ? `₹${sar.estimated_left.toFixed(1)}` : "not set"}</b><small>{(sar.audio_seconds_total / 60).toFixed(1)} min transcribed</small></div>
+      </div>
+
+      {section("Groq", rows.filter((r) => r.provider === "groq"), "Limits: 200k tokens a day and 8k a minute per model and key")}
+      {section("Gemini", rows.filter((r) => r.provider === "gemini"), "Used for photos and as a fallback")}
+      {section("NVIDIA", rows.filter((r) => r.provider === "nvidia"), "Off unless NVIDIA_FALLBACK=1")}
+
+      <div className="u-section">
+        <h4>Sarvam<small>Malayalam speech</small></h4>
         <div className="u-card">
-          <h4><span className="pv" style={{ background: PROVIDERS.sarvam }} />Sarvam credits <small>speech to text</small></h4>
           <div className="rings">
-            {base != null ? (
-              <Ring frac={sar.estimated_left / Math.max(base, 1)} big={`₹${sar.estimated_left.toFixed(1)}`} small={`of ₹${base}`} caption="estimated credits left" />
-            ) : (
-              <Ring frac={1} big="?" small="not set" caption="enter your balance below" color="var(--line)" />
-            )}
+            {base != null ? <Ring frac={sar.estimated_left / Math.max(base, 1)} big={`₹${sar.estimated_left.toFixed(1)}`} small={`of ₹${base}`} caption="estimated credits left" />
+              : <Ring frac={1} big="?" small="not set" caption="enter your balance" color="var(--line)" />}
             <Ring frac={Math.min(sar.audio_seconds_total / 60 / (sar.free_credits / sar.price_per_min), 1)} color="#2aa7a1"
-                  big={`${(sar.audio_seconds_total / 60).toFixed(1)}`} small="minutes" caption={`transcribed in total`} />
+                  big={(sar.audio_seconds_total / 60).toFixed(1)} small="minutes" caption="transcribed in total" />
           </div>
           <div className="stat-row"><span>Spent since you set the balance</span><b>₹{(sar.spent_since ?? 0).toFixed(2)}</b></div>
           <div className="stat-row"><span>Price</span><b>₹{sar.price_per_min}/min of audio</b></div>
           <div className="stat-row"><span>Last call</span>
-            {sarRow?.last ? <span className={`pill ${sarRow.last.status === 200 ? "ok" : "bad"}`}>{sarRow.last.status === 402 ? "402 credits used up" : sarRow.last.status === 200 ? "200 OK" : `error ${sarRow.last.status}`} · {ago(now - sarRow.last.ts)}</span> : <span className="pill">none yet</span>}
+            {sarRow?.last ? <Pill tone={sarRow.last.status === 200 ? "ok" : "bad"}>{sarRow.last.status === 402 ? "402 credits used up" : sarRow.last.status === 200 ? "200 OK" : `error ${sarRow.last.status}`} · {ago(now - sarRow.last.ts)}</Pill> : <Pill>none yet</Pill>}
           </div>
           <div className="bal-form">
             <input type="number" min="0" step="0.01" value={bal} onChange={(e) => setBal(e.target.value)} placeholder="Credits left (₹) from your dashboard" />
             <button onClick={saveBal} disabled={saving || bal === ""}>Save</button>
           </div>
-          <div className="u-note">Sarvam has no API for the balance, so it is an estimate. Read “Credits Left” in the <a href="https://dashboard.sarvam.ai" target="_blank" rel="noreferrer">Sarvam dashboard</a> (Settings → Billing), enter it once, and Sahayi subtracts the audio it transcribes after that. Calls made elsewhere are not counted.</div>
+          <div className="u-note">Sarvam has no API for the balance, so this is an estimate. Read “Credits Left” in the <a href="https://dashboard.sarvam.ai" target="_blank" rel="noreferrer">Sarvam dashboard</a> (Settings → Billing), enter it once, and Sahayi subtracts the audio it transcribes after that.</div>
         </div>
-
-        {models.map((m) => {
-          const rl = m.last?.rl;
-          const age = rl ? now - rl.ts : null;
-          const tokEff = rl ? (age > 60 ? rl.tok_lim : rl.tok_rem) : null;
-          const lat = m.calls ? m.lat / m.calls : 0;
-          const okPct = m.calls ? Math.round((m.ok / m.calls) * 100) : 0;
-          return (
-            <div className={`u-card ${m.calls ? "" : "idle"}`} key={`${m.provider}${m.model}`}>
-              <h4><span className="pv" style={{ background: PROVIDERS[m.provider] || "#999" }} />{m.model.replace("openai/", "").replace("qwen/", "")}
-                <small>{PNAME[m.provider] || m.provider} · {m.kinds.join(", ")}</small></h4>
-              {!m.calls ? <div className="u-empty">No calls yet today</div> : rl ? (
-                <div className="rings">
-                  <Ring frac={tokEff / rl.tok_lim} big={kfmt(tokEff)} small={`of ${kfmt(rl.tok_lim)}`} caption="tokens left this minute" />
-                  <Ring frac={rl.req_rem / rl.req_lim} big={kfmt(rl.req_rem)} small={`of ${kfmt(rl.req_lim)}`} caption="requests left today" />
-                </div>
-              ) : (
-                <div className="rings">
-                  <Ring frac={m.calls ? m.ok / m.calls : 0} big={`${okPct}%`} small="succeeded" caption={`${m.calls} call${m.calls === 1 ? "" : "s"} today`} />
-                  <Ring frac={Math.min(lat / 20, 1)} color="#4c8bf5" big={`${lat.toFixed(1)}s`} small="average" caption="response time" />
-                </div>
-              )}
-              {m.calls > 0 && m.provider === "groq" && m.tokens > 0 && (
-                <>
-                  <div className="stat-row"><span>Tokens used today</span><b>{kfmt(m.tokens)} / {kfmt(u.groq_daily_tokens)}</b></div>
-                  <div className="bar"><i style={{ width: `${Math.min(100, (m.tokens / u.groq_daily_tokens) * 100)}%`, background: colorFor(1 - m.tokens / u.groq_daily_tokens) }} /></div>
-                </>
-              )}
-              {m.calls > 0 && <div className="stat-row"><span>Calls today</span><b>{m.calls} ({m.calls - m.ok} failed)</b></div>}
-              {m.audio > 0 && <div className="stat-row"><span>Audio transcribed</span><b>{(m.audio / 60).toFixed(1)} min</b></div>}
-              {m.calls > 0 && <div className="stat-row"><span>Last call</span>
-                {m.last ? <span className={`pill ${m.last.ok ? "ok" : "bad"}`}>{m.last.ok ? "OK" : m.last.status === 429 ? "rate limited" : `error ${m.last.status || ""}`} · {ago(now - m.last.ts)}</span> : <span className="pill">none yet</span>}
-              </div>}
-              {rl && <div className="u-note">Limits as reported by Groq on its latest reply ({ago(age)}). The daily token cap is from Groq's documentation.</div>}
-            </div>
-          );
-        })}
       </div>
+
       <Activity series={u.series} now={now} />
-      {u.tracking?.total_calls > 0 && <div className="u-foot">Saved in the database, so it survives restarts · {u.tracking.total_calls} calls recorded since {new Date(u.tracking.since * 1000).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>}
+      <div className="u-foot">
+        Counts only calls made through Sahayi. Where Groq has said how much of a daily limit is used (“Groq says”), that figure is shown instead, because it also includes anything else using the same key.
+        {u.tracking?.total_calls > 0 && ` Saved in the database, so it survives restarts · ${u.tracking.total_calls} calls recorded since ${new Date(u.tracking.since * 1000).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.`}
+      </div>
       {err && <div className="error" style={{ marginTop: 10 }}>{err}</div>}
     </div>
   );

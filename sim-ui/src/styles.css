@@ -199,3 +199,27 @@ input, textarea { font: inherit; color: inherit; }
 .lightbox { position: fixed; inset: 0; z-index: 40; background: var(--overlay); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; padding: 24px; animation: fadein .15s; }
 .lightbox img { max-width: 94vw; max-height: 92vh; object-fit: contain; border-radius: 10px; box-shadow: 0 20px 60px var(--shadow); cursor: default; }
 .lightbox .tool { position: absolute; top: 16px; right: 16px; }
+
+.u-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.u-tile { background: var(--input-bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+.u-tile span { font-size: 12px; color: var(--muted); }
+.u-tile b { font-size: 22px; font-weight: 500; }
+.u-tile small { font-size: 12px; color: var(--muted); }
+.u-tile.ok b { color: #7fcf84; } .u-tile.warn b { color: #e0a84a; } .u-tile.bad b { color: #e0675a; }
+.u-section { margin-bottom: 18px; }
+.u-section h4 { margin: 0 0 8px; font-size: 14px; display: flex; align-items: baseline; gap: 10px; }
+.u-section h4 small { color: var(--muted); font-weight: 400; font-size: 12px; }
+.u-table { background: var(--input-bg); border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; }
+.u-row { display: grid; grid-template-columns: minmax(170px, 1.5fr) minmax(170px, 1.6fr) 84px 54px 60px 70px 82px; gap: 10px; align-items: center; padding: 9px 14px; border-top: 1px solid var(--line); font-size: 13px; min-width: 700px; }
+.u-row:first-child { border-top: 0; }
+.u-head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; padding-top: 8px; padding-bottom: 8px; }
+.u-row.idle { opacity: .6; }
+.u-row .n { font-variant-numeric: tabular-nums; color: var(--muted); }
+.u-row .n.bad { color: var(--danger-text); }
+.u-model { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.u-model b { font-weight: 500; }
+.u-model em { font-style: normal; font-size: 11px; background: var(--line); color: var(--muted); border-radius: 8px; padding: 1px 7px; }
+.u-model small { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+.u-used { display: flex; flex-direction: column; gap: 3px; }
+.u-used small { color: var(--muted); font-size: 11px; }
+.pill.warn { background: rgba(224, 168, 74, .18); color: #e0a84a; }
