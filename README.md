@@ -69,6 +69,36 @@ Run the Streamlit test console (audio, image and agent testing without Telegram)
 uv run streamlit run src/bia_hackaton_2026/stt/app.py
 ```
 
+Try the whole family flow without Telegram accounts (real handlers, pipeline and LLM; fake users):
+
+```powershell
+uv run python -m bia_hackaton_2026.sim
+```
+
+```
+maya: /start                      # prints her family code
+ravi: /family <code>
+maya: I feel dizzy and I fell down
+ravi: how is she today?
+ravi: /tell please call me
+```
+
+### Telegram-style simulator (for testing)
+
+A browser UI that looks like Telegram, so you can test the family flow with one real Telegram account.
+Simulated users share the real bot's database: add a family member, join with your real account's code,
+receive its alerts, `/tell` your real account. A simulated user can also act as a senior and talk to the bot.
+Your real Telegram keeps working as normal alongside it.
+
+```powershell
+cd sim-ui; npm install; npm run build; cd ..                         # once
+uv run python -m bia_hackaton_2026.telegram.bot                      # terminal 1: the real bot
+uv run python -m bia_hackaton_2026.sim.server                        # terminal 2: open http://127.0.0.1:8765
+```
+
+Use `npm run dev` in `sim-ui/` (http://localhost:5173) while editing the UI. In the UI: the plus button adds a
+contact; the two layout buttons show one chat or several side by side; type `/` or press Menu for the commands.
+
 ### Commands
 
 Members: `/start`, `/code`, `/newcode`, `/help`.

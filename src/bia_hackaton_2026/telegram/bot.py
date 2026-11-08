@@ -13,6 +13,7 @@ import time
 
 from bia_hackaton_2026.llm.family_qa import answer_family_question, rewrite_for_member
 from bia_hackaton_2026.notify.telegram_family import send_family_alert
+from bia_hackaton_2026.notify.transport import deliver
 from bia_hackaton_2026.pipeline import handle_message, reset_chat, store
 from bia_hackaton_2026.pipeline.status import activity_log, is_elder, record, status_text
 from bia_hackaton_2026.pipeline.timeutil import fmt
@@ -241,8 +242,8 @@ async def relay_to_member(update: Update, context: ContextTypes.DEFAULT_TYPE, te
     done, failed = [], []
     for e in elders:
         try:
-            await context.bot.send_message(
-                int(e["chat_id"]), f"Message from {who} (your family), {fmt()}:\n{msg}\n\nYou can answer me here.")
+            await deliver(context.bot, e["chat_id"],
+                          f"Message from {who} (your family), {fmt()}:\n{msg}\n\nYou can answer me here.")
             done.append(e["name"] or "the member")
         except Exception as ex:
             failed.append(f"{e['name'] or 'the member'} ({str(ex)[:80]})")

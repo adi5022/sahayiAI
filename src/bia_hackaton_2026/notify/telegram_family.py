@@ -7,6 +7,7 @@ linked to that member. There is no preset list: the code is the only way in.
 import os
 import time
 
+from bia_hackaton_2026.notify.transport import deliver
 from bia_hackaton_2026.pipeline import store
 from bia_hackaton_2026.pipeline.timeutil import fmt
 
@@ -38,7 +39,7 @@ async def send_family_alert(bot, elder_chat_id, elder_name: str, alert_text: str
             "Please check on them now. If it is an emergency, call 112 yourself.")
     for cid in targets:
         try:
-            await bot.send_message(int(cid), text)
+            await deliver(bot, cid, text)
             out["delivered"].append(cid)
         except Exception as e:  # e.g. the family member blocked the bot
             out["failed"][cid] = str(e)[:150]

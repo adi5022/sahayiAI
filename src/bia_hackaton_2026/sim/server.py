@@ -1,0 +1,111 @@
+"""Backend for the Telegram-style simulator UI (sim-ui/).
+
+Run:  uv run python -m bia_hackaton_2026.sim.server      (API on http://127.0.0.1:8765, also serves sim-ui/dist)
+
+Works next to the real bot: start the real bot as usual (your own Telegram account stays a real user), and add
+simulated users here. They share the bot's database, so a simulated family member can join your real account's code,
+receive its alerts and /tell it; a simulated user can also be a senior and talk to the bot itself.
+"""
+import asyncio
+from pathlib import Path
+
+import uvicorn
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from bia_hackaton_2026.pipeline import store
+from bia_hackaton_2026.sim import live
+from bia_hackaton_2026.telegram.bot import COMMANDS
+
+load_dotenv()
+DIST = Path(__file__).resolve().parents[3] / "sim-ui" / "dist"
+TAKES_ARGS = {"family", "ask", "tell"}
+
+app = FastAPI(title="Sahayi Telegram simulator")
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+                   allow_methods=["*"], allow_headers=["*"])
+_PENDING: dict[int, int] = {}       # chat id -> messages still being processed
+_TASKS: set[asyncio.Task] = set()
+
+
+class NewUser(BaseModel):
+    name: str
+
+
+class Outgoing(BaseModel):
+    text: str
+
+
+@app.get("/api/commands")
+def commands():
+    return [{"command": c, "description": d, "args": c in TAKES_ARGS} for c, d in COMMANDS]
+
+
+@app.get("/api/users")
+def users():
+    out = []
+    for u in store.virtual_users():
+        msgs = store.virtual_messages(u["chat_id"], limit=1)
+        last = msgs[-1] if msgs else None
+        out.append({"chat_id": int(u["chat_id"]), "name": u["name"], "last": last,
+                    "typing": _PENDING.get(int(u["chat_id"]), 0) > 0})
+    return out
+
+
+@app.post("/api/users")
+def add_user(body: NewUser):
+    if not body.name.strip():
+        raise HTTPException(400, "name required")
+    return {"chat_id": store.add_virtual_user(body.name), "name": body.name.strip()}
+
+
+@app.delete("/api/users/{chat_id}")
+def delete_user(chat_id: int):
+    store.delete_virtual_user(chat_id)
+    return {"ok": True}
+
+
+@app.get("/api/users/{chat_id}/messages")
+def messages(chat_id: int, after: int = 0):
+    return {"messages": store.virtual_messages(chat_id, after=after), "typing": _PENDING.get(chat_id, 0) > 0}
+
+
+@app.post("/api/users/{chat_id}/send")
+async def send(chat_id: int, body: Outgoing):
+    name = next((u["name"] for u in store.virtual_users() if int(u["chat_id"]) == chat_id), None)
+    if name is None:
+        raise HTTPException(404, "unknown user")
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "empty message")
+    _PENDING[chat_id] = _PENDING.get(chat_id, 0) + 1
+
+    async def run():
+        try:
+            await live.say(chat_id, name, text)
+        finally:
+            _PENDING[chat_id] -= 1
+
+    task = asyncio.create_task(run())
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
+    return {"ok": True}
+
+
+if DIST.exists():  # built UI (npm run build in sim-ui/)
+    app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
+
+    @app.get("/{path:path}")
+    def spa(path: str):
+        f = DIST / path
+        return FileResponse(f if path and f.is_file() else DIST / "index.html")
+
+
+if __name__ == "__main__":
+    print("Sahayi simulator API on http://127.0.0.1:8765" + ("  (UI served at the same address)" if DIST.exists()
+          else "  (UI not built: run it with npm run dev in sim-ui/)"))
+    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
