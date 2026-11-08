@@ -7,6 +7,7 @@ simulated users here. They share the bot's database, so a simulated family membe
 receive its alerts and /tell it; a simulated user can also be a senior and talk to the bot itself.
 """
 import asyncio
+import os
 from pathlib import Path
 
 import uvicorn
@@ -23,6 +24,7 @@ from bia_hackaton_2026.telegram.bot import COMMANDS
 
 load_dotenv()
 DIST = Path(__file__).resolve().parents[3] / "sim-ui" / "dist"
+PORT = int(os.environ.get("SIM_PORT", "8765"))
 TAKES_ARGS = {"family", "ask", "tell"}
 
 app = FastAPI(title="Sahayi Telegram simulator")
@@ -137,6 +139,6 @@ if DIST.exists():  # built UI (npm run build in sim-ui/)
 
 
 if __name__ == "__main__":
-    print("Sahayi simulator API on http://127.0.0.1:8765" + ("  (UI served at the same address)" if DIST.exists()
+    print(f"Sahayi simulator API on http://127.0.0.1:{PORT}" + ("  (UI served at the same address)" if DIST.exists()
           else "  (UI not built: run it with npm run dev in sim-ui/)"))
-    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")

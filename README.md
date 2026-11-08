@@ -10,6 +10,27 @@ and Tharun Thomas Eapen (Mar Baselios College of Engineering and Technology).
 
 <!-- Add a demo GIF here: ![demo](docs/demo.gif) -->
 
+## Screenshots
+
+A Telegram-style test console with simulated seniors and family members (see "Telegram-style simulator" below).
+
+**A senior sends an injury photo and gets calm, minimal guidance:**
+
+![Senior chat with an injury photo](docs/screenshots/01-senior-injury-photo.png)
+
+**Family receive a typed alert and the real photo, and can write naturally to the senior:**
+
+![Family view with alerts for two seniors](docs/screenshots/02-family-two-members-alerts.png)
+
+**Senior and family side by side, and a scam screenshot being checked:**
+
+![Bleeding hand: senior and family](docs/screenshots/03-bleeding-hand-senior-and-family.png)
+![Scam screenshots: senior and family](docs/screenshots/04-scam-screenshots-senior-and-family.png)
+
+**Several chats at once:**
+
+![Four chats side by side](docs/screenshots/05-four-chats-overview.png)
+
 ## Features
 
 - **Voice, text and photos.** Malayalam, English and code-mixed speech.

@@ -197,6 +197,18 @@ export default function App() {
     });
   }, [msgs, open]);
 
+  // Deep link for demos and screenshots: ?layout=split&chats=Lakshmi%20Amma,Ravi opens those chats once the list has loaded.
+  const deepLinked = useRef(false);
+  useEffect(() => {
+    if (deepLinked.current || users.length === 0) return;
+    deepLinked.current = true;
+    const q = new URLSearchParams(window.location.search);
+    const names = (q.get("chats") || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+    if (q.get("layout") === "split") setLayout("split");
+    const ids = names.map((n) => users.find((u) => u.name.toLowerCase() === n)?.chat_id).filter(Boolean);
+    if (ids.length) setOpen(ids.slice(0, 4));
+  }, [users]);
+
   const select = (id) => {
     if (layout === "single") setOpen([id]);
     else setOpen((o) => (o.includes(id) ? o.filter((x) => x !== id) : [...o, id].slice(-4)));
